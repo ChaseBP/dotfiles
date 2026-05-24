@@ -1,78 +1,55 @@
--- Set leader key
 vim.g.mapleader = ' '
 vim.g.maplocalleader = ' '
 
--- Disable the spacebar key's default behavior in Normal and Visual modes
-vim.keymap.set({ 'n', 'v' }, '<Space>', '<Nop>', { silent = true })
-
--- For conciseness
+local map = vim.keymap.set
 local opts = { noremap = true, silent = true }
 
---Prevent visual block mode overlapping
-vim.keymap.set({ 'n', 'v' }, '<M-v>', '<C-v>', opts)
+map({ 'n', 'v' }, '<Space>', '<Nop>', { silent = true, desc = 'Disable space default' })
 
--- save file
-vim.keymap.set('n', '<C-s>', '<cmd> w <CR>', opts)
+map('n', '<C-s>', '<cmd>w<CR>', vim.tbl_extend('force', opts, { desc = 'Save file' }))
+map('n', '<leader>sn', '<cmd>noautocmd w<CR>', vim.tbl_extend('force', opts, { desc = 'Save without formatting' }))
+map('n', '<C-q>', '<cmd>q<CR>', vim.tbl_extend('force', opts, { desc = 'Quit window' }))
 
--- save file without auto-formatting
-vim.keymap.set('n', '<leader>sn', '<cmd>noautocmd w <CR>', opts)
+map('n', 'x', '"_x', vim.tbl_extend('force', opts, { desc = 'Delete char without yanking' }))
+map('n', '<C-d>', '<C-d>zz', vim.tbl_extend('force', opts, { desc = 'Scroll down and center' }))
+map('n', '<C-u>', '<C-u>zz', vim.tbl_extend('force', opts, { desc = 'Scroll up and center' }))
+map('n', 'n', 'nzzzv', vim.tbl_extend('force', opts, { desc = 'Next search result centered' }))
+map('n', 'N', 'Nzzzv', vim.tbl_extend('force', opts, { desc = 'Previous search result centered' }))
 
--- quit file
-vim.keymap.set('n', '<C-q>', '<cmd> q <CR>', opts)
+map('n', '<Up>', '<cmd>resize -2<CR>', vim.tbl_extend('force', opts, { desc = 'Decrease window height' }))
+map('n', '<Down>', '<cmd>resize +2<CR>', vim.tbl_extend('force', opts, { desc = 'Increase window height' }))
+map('n', '<Right>', '<cmd>vertical resize -2<CR>', vim.tbl_extend('force', opts, { desc = 'Decrease window width' }))
+map('n', '<Left>', '<cmd>vertical resize +2<CR>', vim.tbl_extend('force', opts, { desc = 'Increase window width' }))
 
--- delete single character without copying into register
-vim.keymap.set('n', 'x', '"_x', opts)
+map('n', '<Tab>', '<cmd>bnext<CR>', vim.tbl_extend('force', opts, { desc = 'Next buffer' }))
+map('n', '<S-Tab>', '<cmd>bprevious<CR>', vim.tbl_extend('force', opts, { desc = 'Previous buffer' }))
+map('n', '<leader>bd', function()
+  require('mini.bufremove').delete(0, false)
+end, { desc = '[B]uffer [D]elete' })
+map('n', '<leader>bn', '<cmd>enew<CR>', vim.tbl_extend('force', opts, { desc = '[B]uffer [N]ew' }))
 
--- Vertical scroll and center
-vim.keymap.set('n', '<C-d>', '<C-d>zz', opts)
-vim.keymap.set('n', '<C-u>', '<C-u>zz', opts)
+map('n', '<leader>wv', '<C-w>v', vim.tbl_extend('force', opts, { desc = '[W]indow split [V]ertical' }))
+map('n', '<leader>ws', '<C-w>s', vim.tbl_extend('force', opts, { desc = '[W]indow split horizontal' }))
+map('n', '<leader>we', '<C-w>=', vim.tbl_extend('force', opts, { desc = '[W]indow equalize' }))
+map('n', '<leader>wq', '<cmd>close<CR>', vim.tbl_extend('force', opts, { desc = '[W]indow [Q]uit' }))
 
--- Find and center
-vim.keymap.set('n', 'n', 'nzzzv', opts)
-vim.keymap.set('n', 'N', 'Nzzzv', opts)
+map('n', '<leader>to', '<cmd>tabnew<CR>', vim.tbl_extend('force', opts, { desc = '[T]ab [O]pen' }))
+map('n', '<leader>tx', '<cmd>tabclose<CR>', vim.tbl_extend('force', opts, { desc = '[T]ab close' }))
+map('n', '<leader>tn', '<cmd>tabn<CR>', vim.tbl_extend('force', opts, { desc = '[T]ab [N]ext' }))
+map('n', '<leader>tp', '<cmd>tabp<CR>', vim.tbl_extend('force', opts, { desc = '[T]ab [P]revious' }))
 
--- Resize with arrows
-vim.keymap.set('n', '<Up>', ':resize -2<CR>', opts)
-vim.keymap.set('n', '<Down>', ':resize +2<CR>', opts)
-vim.keymap.set('n', '<Left>', ':vertical resize -2<CR>', opts)
-vim.keymap.set('n', '<Right>', ':vertical resize +2<CR>', opts)
+map('n', '<leader>lw', '<cmd>set wrap!<CR>', vim.tbl_extend('force', opts, { desc = '[L]ine [W]rap toggle' }))
+map('v', '<', '<gv', vim.tbl_extend('force', opts, { desc = 'Indent left and reselect' }))
+map('v', '>', '>gv', vim.tbl_extend('force', opts, { desc = 'Indent right and reselect' }))
+map('v', 'p', '"_dP', vim.tbl_extend('force', opts, { desc = 'Paste without replacing yank' }))
 
--- Buffers
-vim.keymap.set('n', '<Tab>', ':bnext<CR>', opts)
-vim.keymap.set('n', '<S-Tab>', ':bprevious<CR>', opts)
-vim.keymap.set('n', '<leader>x', ':bdelete!<CR>', opts) -- close buffer
-vim.keymap.set('n', '<leader>b', '<cmd> enew <CR>', opts) -- new buffer
-
--- Window management
-vim.keymap.set('n', '<leader>v', '<C-w>v', opts) -- split window vertically
-vim.keymap.set('n', '<leader>h', '<C-w>s', opts) -- split window horizontally
-vim.keymap.set('n', '<leader>se', '<C-w>=', opts) -- make split windows equal width & height
-vim.keymap.set('n', '<leader>xs', ':close<CR>', opts) -- close current split window
-
--- Navigate between splits
-vim.keymap.set('n', '<C-k>', ':wincmd k<CR>', opts)
-vim.keymap.set('n', '<C-j>', ':wincmd j<CR>', opts)
-vim.keymap.set('n', '<C-h>', ':wincmd h<CR>', opts)
-vim.keymap.set('n', '<C-l>', ':wincmd l<CR>', opts)
-
--- Tabs
-vim.keymap.set('n', '<leader>to', ':tabnew<CR>', opts) -- open new tab
-vim.keymap.set('n', '<leader>tx', ':tabclose<CR>', opts) -- close current tab
-vim.keymap.set('n', '<leader>tn', ':tabn<CR>', opts) --  go to next tab
-vim.keymap.set('n', '<leader>tp', ':tabp<CR>', opts) --  go to previous tab
-
--- Toggle line wrapping
-vim.keymap.set('n', '<leader>lw', '<cmd>set wrap!<CR>', opts)
-
--- Stay in indent mode
-vim.keymap.set('v', '<', '<gv', opts)
-vim.keymap.set('v', '>', '>gv', opts)
-
--- Keep last yanked when pasting
-vim.keymap.set('v', 'p', '"_dP', opts)
-
--- Diagnostic keymaps
-vim.keymap.set('n', '[d', vim.diagnostic.goto_prev, { desc = 'Go to previous diagnostic message' })
-vim.keymap.set('n', ']d', vim.diagnostic.goto_next, { desc = 'Go to next diagnostic message' })
-vim.keymap.set('n', '<leader>d', vim.diagnostic.open_float, { desc = 'Open floating diagnostic message' })
-vim.keymap.set('n', '<leader>q', vim.diagnostic.setloclist, { desc = 'Open diagnostics list' })
+map('n', '[d', function()
+  vim.diagnostic.jump { count = -1, float = true }
+end, { desc = 'Previous diagnostic' })
+map('n', ']d', function()
+  vim.diagnostic.jump { count = 1, float = true }
+end, { desc = 'Next diagnostic' })
+map('n', '<leader>d', vim.diagnostic.open_float, { desc = 'Open diagnostic float' })
+map('n', '<leader>q', vim.diagnostic.setloclist, { desc = 'Open diagnostic location list' })
+map('n', '[q', '<cmd>cprevious<CR>', vim.tbl_extend('force', opts, { desc = 'Previous quickfix item' }))
+map('n', ']q', '<cmd>cnext<CR>', vim.tbl_extend('force', opts, { desc = 'Next quickfix item' }))
