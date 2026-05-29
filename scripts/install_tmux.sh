@@ -32,5 +32,13 @@ fi
 echo "🔗 Linking tmux config..."
 ln -sf "$PWD/tmux/tmux.conf" "$HOME/.tmux.conf"
 
+# ------------------------------
+# 4. Link helper scripts
+# ------------------------------
+echo "🔗 Linking tmux helper scripts..."
+mkdir -p "$HOME/.tmux/scripts"
+chmod +x "$PWD/tmux/scripts/"*.sh
+ln -sf "$PWD/tmux/scripts/resurrect-named.sh" "$HOME/.tmux/scripts/resurrect-named.sh"
+
 echo "✅ tmux setup complete"
 echo "👉 Start tmux and press Prefix + I to install plugins"
