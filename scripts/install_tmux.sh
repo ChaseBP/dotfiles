@@ -14,6 +14,14 @@ else
     echo "✔  tmux already installed"
 fi
 
+# fzf powers the saved-session popup (prefix + G)
+if ! command -v fzf >/dev/null 2>&1; then
+    echo "📦 Installing fzf..."
+    sudo apt install -y fzf
+else
+    echo "✔  fzf already installed"
+fi
+
 # ------------------------------
 # 2. Install TPM
 # ------------------------------
@@ -38,7 +46,9 @@ ln -sf "$PWD/tmux/tmux.conf" "$HOME/.tmux.conf"
 echo "🔗 Linking tmux helper scripts..."
 mkdir -p "$HOME/.tmux/scripts"
 chmod +x "$PWD/tmux/scripts/"*.sh
-ln -sf "$PWD/tmux/scripts/resurrect-named.sh" "$HOME/.tmux/scripts/resurrect-named.sh"
+for f in "$PWD/tmux/scripts/"*.sh; do
+    ln -sf "$f" "$HOME/.tmux/scripts/$(basename "$f")"
+done
 
 echo "✅ tmux setup complete"
 echo "👉 Start tmux and press Prefix + I to install plugins"
