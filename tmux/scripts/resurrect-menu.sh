@@ -297,6 +297,37 @@ case "${1:-menu}" in
     esac
     ;;
 
+  keys-help)
+    # Full-screen help shown via fzf's execute() (bound to `?`). Nested tmux
+    # display-popups don't render while already inside a popup, so we take over
+    # the popup's screen instead, frame it with rules, and wait for a keypress.
+    b=$'\x1b[1m'; c=$'\x1b[36m'; y=$'\x1b[33m'; d=$'\x1b[2m'; r=$'\x1b[0m'
+    rule='────────────────────────────────────────────'
+    row() { printf '     %s%-9s%s %s│%s %s\n' "$2" "$1" "$r" "$d" "$r" "$3"; }
+    clear 2>/dev/null || printf '\033c'
+    printf '\n  %s┌─ %skeyboard shortcuts%s %s%s%s\n' "$d" "$b" "$r" "$d" "${rule:22}" "$r"
+    printf '\n  %sNAVIGATION%s\n' "$b" "$r"
+    row type  "$c" "filter the list"
+    row tab   "$c" "toggle multi-select"
+    row enter "$c" "restore profile"
+    row esc   "$c" "close"
+    printf '\n  %sACTIONS%s\n' "$b" "$r"
+    row ctrl-s "$c" "save current state"
+    row ctrl-r "$c" "rename"
+    row ctrl-x "$c" "delete (multi-select ok)"
+    row ctrl-e "$c" "set / clear description"
+    row ctrl-p "$c" "pin / unpin"
+    row ctrl-t "$c" "cycle sort (recent ⇄ name)"
+    row ctrl-/ "$c" "flip preview pane"
+    printf '\n  %sFROM TMUX%s\n' "$b" "$r"
+    row prefix+G "$y" "open the picker"
+    row prefix+L "$y" "restore most recent"
+    row prefix+W "$y" "write-back current profile"
+    printf '\n  %s└%s%s\n' "$d" "$rule" "$r"
+    printf '  %spress any key to close…%s' "$d" "$r"
+    read -rsn1
+    ;;
+
   menu|*)
     if ! command -v fzf >/dev/null 2>&1; then
       printf '\n  fzf is not installed.\n  Install it (sudo apt install -y fzf), then reopen.\n\n'
@@ -310,8 +341,12 @@ case "${1:-menu}" in
       read -rsn1 -p "  press any key to close…"
       exit 0
     fi
-    header=$'type to filter   tab select   enter restore   esc close'
-    header+=$'\nctrl-s save  ctrl-r rename  ctrl-x delete  ctrl-e describe  ctrl-t sort  ctrl-p pin  ctrl-/ flip'
+    # Header: keys in cyan, "→" and the " │ " group separators dimmed. fzf
+    # renders ANSI in --header. Reads as: type → filter │ tab → select │ …
+    hk=$'\x1b[36m'; hd=$'\x1b[2m'; hr=$'\x1b[0m'
+    pair() { printf '%s%s%s %s→%s %s' "$hk" "$1" "$hr" "$hd" "$hr" "$2"; }
+    sep=" ${hd}│${hr} "
+    header="$(pair type filter)$sep$(pair tab select)$sep$(pair enter restore)$sep$(pair esc close)$sep$(pair '?' shortcuts)"
     COLOR=1 "$SELF" rows | COLOR=1 fzf \
       --delimiter='\t' \
       --with-nth=2.. \
@@ -330,6 +365,7 @@ case "${1:-menu}" in
       --bind="ctrl-e:execute($SELF describe-interactive {1})+reload(COLOR=1 $SELF rows)" \
       --bind="ctrl-p:execute-silent($SELF pin-toggle {1})+reload(COLOR=1 $SELF rows)" \
       --bind="ctrl-t:execute-silent($SELF cycle-sort)+reload(COLOR=1 $SELF rows)" \
-      --bind="ctrl-/:change-preview-window(right,60%|down,40%|hidden|down,55%)"
+      --bind="ctrl-/:change-preview-window(right,60%|down,40%|hidden|down,55%)" \
+      --bind="?:execute($SELF keys-help)"
     ;;
 esac
