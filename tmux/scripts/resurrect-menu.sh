@@ -165,26 +165,34 @@ trunc() { # $1=string $2=max
 case "${1:-menu}" in
   rows)
     # One row per profile: field 1 = bare name (for actions), field 2 = display.
+    # COLOR=1 wraps the markers, description and time in ANSI escapes — fzf is
+    # launched with --ansi, so they render in the picker pane.
     mode="$(sort_mode)"
     current="$($NAMED_BIN current 2>/dev/null || true)"
     declare -A pins=()
     load_pins_into pins
+    if [ "${COLOR:-0}" = "1" ]; then
+      y=$'\x1b[33m'; c=$'\x1b[36m'; d=$'\x1b[2m'; r=$'\x1b[0m'
+    else
+      y=; c=; d=; r=
+    fi
     while IFS= read -r f; do
       [ -e "$f" ] || continue
       name="${f##*/}"; name="${name%.txt}"
-      pin_mark=' '; [ -n "${pins[$name]:-}" ] && pin_mark='*'
-      cur_mark=' '; [ "$name" = "$current" ]   && cur_mark='>'
+      if [ -n "${pins[$name]:-}" ]; then pin_mark="${y}*${r}"; else pin_mark=' '; fi
+      if [ "$name" = "$current" ];   then cur_mark="${c}>${r}";  else cur_mark=' '; fi
       read -r ns nw < <(parse_profile "$f" counts)
-      desc="$(desc_of "$name")"
-      desc_col=""
-      [ -n "$desc" ] && desc_col="$(trunc "$desc" 26)"
-      printf '%s\t %s%s %-18s %2ss/%2sw  %-26s  %s\n' \
+      # Pad the visible description text BEFORE wrapping in ANSI so the time
+      # column stays aligned (printf pads by byte count, not visible width).
+      desc_padded="$(printf '%-26s' "$(trunc "$(desc_of "$name")" 26)")"
+      desc_col="${d}${desc_padded}${r}"
+      printf '%s\t %b%b %-18s %2ss/%2sw  %b  %s%s%s\n' \
         "$name" \
         "$pin_mark" "$cur_mark" \
         "$(trunc "$name" 18)" \
         "$ns" "$nw" \
         "$desc_col" \
-        "$(rel_time "$f")"
+        "$d" "$(rel_time "$f")" "$r"
     done < <(sorted_files "$mode")
     ;;
 
