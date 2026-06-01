@@ -29,6 +29,7 @@
 #   describe-interactive N prompt + describe (used by ctrl-e)
 #   pin-toggle N           toggle pin on N (used by ctrl-p)
 #   cycle-sort             advance the persistent sort mode (used by ctrl-t)
+#   cycle-view             advance the persistent preview mode (used by ctrl-v)
 set -euo pipefail
 
 # A display-popup shell may not have ~/.local/bin on PATH (zsh adds it only in
@@ -41,9 +42,14 @@ SELF="$HOME/.tmux/scripts/resurrect-menu.sh"
 NAMED_DIR="$("$NAMED_BIN" dir)"
 PINS_FILE="$NAMED_DIR/.pins"
 SORT_FILE="${TMPDIR:-/tmp}/resurrect-menu-sort.${USER:-$(id -u)}"
+VIEW_FILE="${TMPDIR:-/tmp}/resurrect-menu-view.${USER:-$(id -u)}"
 
 sort_mode() { cat "$SORT_FILE" 2>/dev/null || echo mtime; }
 set_sort()  { printf '%s' "$1" > "$SORT_FILE"; }
+
+# Preview view mode — persisted so the chosen preference sticks. Cycled by ctrl-v.
+view_mode() { cat "$VIEW_FILE" 2>/dev/null || echo active; }
+set_view()  { printf '%s' "$1" > "$VIEW_FILE"; }
 
 # Human-friendly age of a file from its mtime.
 rel_time() { # $1=file
@@ -58,12 +64,16 @@ rel_time() { # $1=file
   fi
 }
 
-# Parse a resurrect snapshot. mode=counts -> "<sessions> <windows>";
-# mode=detail -> a per-session, per-window breakdown (program + cwd).
+# Parse a resurrect snapshot. Modes:
+#   counts     -> "<sessions> <windows>" (one line, for the picker rows)
+#   full       -> every session, every window (program + cwd)
+#   active     -> only the active session's windows, + "N more" footer
+#   collapsed  -> one summary line per session (window count + cwd)
 # COLOR=1 in the environment enables ANSI escapes (fzf renders them).
 # Field map (tab-separated) from resurrect save.sh:
 #   pane   : f[1]=session f[2]=window_index f[7]=:current_path f[8]=pane_active f[9]=command
 #   window : f[1]=session f[2]=window_index f[3]=:window_name
+#   state  : f[1]=active (client) session  — used to pick the "active" session
 parse_profile() { # $1=file  $2=mode
   python3 - "$1" "$2" <<'PY'
 import sys, os, signal
@@ -76,6 +86,7 @@ def c(s, code):
     return f"\x1b[{code}m{s}\x1b[0m" if USE_COLOR else s
 CYAN, GREEN, DIM, BOLD = "36", "32", "2", "1"
 sessions, win_order, win_name, pane_info = [], {}, {}, {}
+active = None          # active session, from the `state` record
 def see(s, w=None):
     if s not in win_order:
         win_order[s] = []; sessions.append(s)
@@ -87,7 +98,9 @@ try:
             f = line.rstrip("\n").split("\t")
             if not f:
                 continue
-            if f[0] == "window" and len(f) > 3:
+            if f[0] == "state" and len(f) > 1:
+                active = f[1]
+            elif f[0] == "window" and len(f) > 3:
                 see(f[1], f[2]); win_name[(f[1], f[2])] = f[3].lstrip(":")
             elif f[0] == "pane" and len(f) > 9:
                 see(f[1], f[2]); key = (f[1], f[2])
@@ -96,18 +109,47 @@ try:
 except OSError:
     pass
 
+def shorten(cwd):
+    return "~" + cwd[len(home):] if home and cwd.startswith(home) else cwd
+def wins(s):
+    return sorted(win_order[s], key=lambda x: int(x) if x.isdigit() else 0)
+def win_line(s, w):
+    cmd, cwd = pane_info.get((s, w), ("", ""))
+    label = win_name.get((s, w)) or cmd or "?"
+    return f"   {w:>2} {c(f'{label:<14}', GREEN)} {c(shorten(cwd), DIM)}"
+
 if mode == "counts":
     nwin = sum(len(v) for v in win_order.values())
     print(f"{len(sessions)} {nwin}")
-else:
+
+elif mode == "collapsed":
     for s in sessions:
-        print(f"{c('●', CYAN)} {c(s, BOLD)}")
-        for w in sorted(win_order[s], key=lambda x: int(x) if x.isdigit() else 0):
-            cmd, cwd = pane_info.get((s, w), ("", ""))
-            label = win_name.get((s, w)) or cmd or "?"
-            if home and cwd.startswith(home):
-                cwd = "~" + cwd[len(home):]
-            print(f"   {w:>2} {c(f'{label:<14}', GREEN)} {c(cwd, DIM)}")
+        ws = wins(s); n = len(ws)
+        cwd = shorten(pane_info.get((s, ws[0]), ("", ""))[1]) if ws else ""
+        tag = c(" ·active", DIM) if s == active else ""
+        unit = "window" if n == 1 else "windows"
+        print(f"{c('●', CYAN)} {c(s, BOLD)}{tag}   {n} {unit}   {c(cwd, DIM)}")
+
+elif mode == "active":
+    target = active if active in win_order else (sessions[0] if sessions else None)
+    if target is None:
+        print("(empty snapshot)")
+    else:
+        print(f"{c('●', CYAN)} {c(target, BOLD)}   {c('(active session)', DIM)}")
+        for w in wins(target):
+            print(win_line(target, w))
+        others = [s for s in sessions if s != target]
+        if others:
+            print()
+            label = "session" if len(others) == 1 else "sessions"
+            print(c(f"+ {len(others)} more {label}: {', '.join(others)}", DIM))
+
+else:  # full
+    for s in sessions:
+        tag = c(" ·active", DIM) if s == active else ""
+        print(f"{c('●', CYAN)} {c(s, BOLD)}{tag}")
+        for w in wins(s):
+            print(win_line(s, w))
 PY
 }
 
@@ -225,8 +267,9 @@ case "${1:-menu}" in
     if [ -n "$desc" ]; then
       printf '%s%s%s\n' "$d" "$desc" "$r"
     fi
-    printf '\n'
-    parse_profile "$file" detail
+    view="$(view_mode)"
+    printf '%sview: %s  ·  ctrl-v to change%s\n\n' "$d" "$view" "$r"
+    parse_profile "$file" "$view"
     ;;
 
   save-interactive)
@@ -297,6 +340,15 @@ case "${1:-menu}" in
     esac
     ;;
 
+  cycle-view)
+    # active -> collapsed -> full -> active
+    case "$(view_mode)" in
+      active)    set_view collapsed ;;
+      collapsed) set_view full      ;;
+      *)         set_view active    ;;
+    esac
+    ;;
+
   keys-help)
     # Full-screen help shown via fzf's execute() (bound to `?`). Nested tmux
     # display-popups don't render while already inside a popup, so we take over
@@ -318,6 +370,7 @@ case "${1:-menu}" in
     row ctrl-e "$c" "set / clear description"
     row ctrl-p "$c" "pin / unpin"
     row ctrl-t "$c" "cycle sort (recent ⇄ name)"
+    row ctrl-v "$c" "cycle preview (active/collapsed/full)"
     row ctrl-/ "$c" "flip preview pane"
     printf '\n  %sFROM TMUX%s\n' "$b" "$r"
     row prefix+G "$y" "open the picker"
@@ -365,6 +418,7 @@ case "${1:-menu}" in
       --bind="ctrl-e:execute($SELF describe-interactive {1})+reload(COLOR=1 $SELF rows)" \
       --bind="ctrl-p:execute-silent($SELF pin-toggle {1})+reload(COLOR=1 $SELF rows)" \
       --bind="ctrl-t:execute-silent($SELF cycle-sort)+reload(COLOR=1 $SELF rows)" \
+      --bind="ctrl-v:execute-silent($SELF cycle-view)+refresh-preview" \
       --bind="ctrl-/:change-preview-window(right,60%|down,40%|hidden|down,55%)" \
       --bind="?:execute($SELF keys-help)"
     ;;
