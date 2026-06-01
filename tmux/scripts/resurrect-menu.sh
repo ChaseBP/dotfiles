@@ -16,6 +16,7 @@
 #   ctrl-e         set/clear description for selected
 #   ctrl-t         cycle sort (mtime <-> name)
 #   ctrl-p         toggle pin on selected
+#   alt-v          cycle preview view (active/collapsed/full)
 #   ctrl-/         cycle preview pane position
 #   esc            close
 #
@@ -29,7 +30,7 @@
 #   describe-interactive N prompt + describe (used by ctrl-e)
 #   pin-toggle N           toggle pin on N (used by ctrl-p)
 #   cycle-sort             advance the persistent sort mode (used by ctrl-t)
-#   cycle-view             advance the persistent preview mode (used by ctrl-v)
+#   cycle-view             advance the persistent preview mode (used by alt-v)
 set -euo pipefail
 
 # A display-popup shell may not have ~/.local/bin on PATH (zsh adds it only in
@@ -47,7 +48,7 @@ VIEW_FILE="${TMPDIR:-/tmp}/resurrect-menu-view.${USER:-$(id -u)}"
 sort_mode() { cat "$SORT_FILE" 2>/dev/null || echo mtime; }
 set_sort()  { printf '%s' "$1" > "$SORT_FILE"; }
 
-# Preview view mode — persisted so the chosen preference sticks. Cycled by ctrl-v.
+# Preview view mode — persisted so the chosen preference sticks. Cycled by alt-v.
 view_mode() { cat "$VIEW_FILE" 2>/dev/null || echo active; }
 set_view()  { printf '%s' "$1" > "$VIEW_FILE"; }
 
@@ -268,7 +269,7 @@ case "${1:-menu}" in
       printf '%s%s%s\n' "$d" "$desc" "$r"
     fi
     view="$(view_mode)"
-    printf '%sview: %s  ·  ctrl-v to change%s\n\n' "$d" "$view" "$r"
+    printf '%sview: %s  ·  alt-v to change%s\n\n' "$d" "$view" "$r"
     parse_profile "$file" "$view"
     ;;
 
@@ -370,7 +371,7 @@ case "${1:-menu}" in
     row ctrl-e "$c" "set / clear description"
     row ctrl-p "$c" "pin / unpin"
     row ctrl-t "$c" "cycle sort (recent ⇄ name)"
-    row ctrl-v "$c" "cycle preview (active/collapsed/full)"
+    row alt-v  "$c" "cycle preview (active/collapsed/full)"
     row ctrl-/ "$c" "flip preview pane"
     printf '\n  %sFROM TMUX%s\n' "$b" "$r"
     row prefix+G "$y" "open the picker"
@@ -418,7 +419,7 @@ case "${1:-menu}" in
       --bind="ctrl-e:execute($SELF describe-interactive {1})+reload(COLOR=1 $SELF rows)" \
       --bind="ctrl-p:execute-silent($SELF pin-toggle {1})+reload(COLOR=1 $SELF rows)" \
       --bind="ctrl-t:execute-silent($SELF cycle-sort)+reload(COLOR=1 $SELF rows)" \
-      --bind="ctrl-v:execute-silent($SELF cycle-view)+refresh-preview" \
+      --bind="alt-v:execute-silent($SELF cycle-view)+refresh-preview" \
       --bind="ctrl-/:change-preview-window(right,60%|down,40%|hidden|down,55%)" \
       --bind="?:execute($SELF keys-help)"
     ;;
