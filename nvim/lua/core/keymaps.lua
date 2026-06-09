@@ -11,6 +11,7 @@ map('n', '<leader>sn', '<cmd>noautocmd w<CR>', vim.tbl_extend('force', opts, { d
 map('n', '<C-q>', '<cmd>q<CR>', vim.tbl_extend('force', opts, { desc = 'Quit window' }))
 
 map('n', 'x', '"_x', vim.tbl_extend('force', opts, { desc = 'Delete char without yanking' }))
+map({ 'n', 'x' }, '<leader>v', '<C-v>', vim.tbl_extend('force', opts, { desc = 'Visual block mode' }))
 map('n', '<C-d>', '<C-d>zz', vim.tbl_extend('force', opts, { desc = 'Scroll down and center' }))
 map('n', '<C-u>', '<C-u>zz', vim.tbl_extend('force', opts, { desc = 'Scroll up and center' }))
 map('n', 'n', 'nzzzv', vim.tbl_extend('force', opts, { desc = 'Next search result centered' }))

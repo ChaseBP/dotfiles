@@ -461,20 +461,6 @@ sp.lua:165-170`
 6-18`
 - Copilot suggestions/panel disabled in favor of completion-source usage: `lua/plugins/ai.lua:6-8`
 
-### CodeCompanion
-
-- Uses `codecompanion.nvim` with Copilot adapters for chat, inline, and command workflows: `lua/plugins/ai.lua:21-46`
-- Keymaps:
-  - AI actions: `<leader>aa`: `lua/plugins/ai.lua:47-48`
-  - AI chat toggle: `<leader>ac`: `lua/plugins/ai.lua:49`
-  - Inline AI prompt: `<leader>ai`: `lua/plugins/ai.lua:50`
-  - Send visual selection to chat: `<leader>ap`: `lua/plugins/ai.lua:51`
-- Adds command-line abbreviation `cc` → `CodeCompanion`: `lua/plugins/ai.lua:53-55`
-
-### Markdown rendering for AI buffers
-
-- `render-markdown.nvim` is enabled for both `markdown` and `codecompanion` filetypes: `lua/plugins/qol.lua:11-20`
-
 ---
 
 ## 15. Utility / Discoverability Plugins
@@ -485,7 +471,7 @@ sp.lua:165-170`
 
 ### Markdown rendering
 
-- `render-markdown.nvim` improves Markdown and CodeCompanion buffer presentation: `lua/plugins/qol.lua:11-20`
+- `render-markdown.nvim` improves Markdown buffer presentation: `lua/plugins/qol.lua:11-20`
 
 ### Color visualization
 
@@ -525,7 +511,7 @@ This Neovim setup is focused on:
 - fast fuzzy searching and navigation
 - Git-heavy workflows
 - SQL/database interaction
-- AI-assisted coding using Copilot and CodeCompanion
+- AI-assisted coding using Copilot
 - polished UI with file explorer, statusline, bufferline, dashboard, and markdown rendering
 - sensible defaults for formatting, linting, diagnostics, and code exploration
 
@@ -564,7 +550,7 @@ Treesitter parsers, LSP servers, formatters, and linters cover many common langu
 
 ## 5. AI and database workflows are first-class concerns
 
-This is notable because many configs treat these as optional extras. Here, Copilot, CodeCompanion, Dadbod UI, Dadbod completion, and SQL-specific completion are all wired in directly: lua/plugins/ai.lua:1-57, lua/plugins/sql-plugins.lua:1-23, lua/plugins/autocompletion.lua:100-133.
+This is notable because many configs treat these as optional extras. Here, Copilot, Dadbod UI, Dadbod completion, and SQL-specific completion are all wired in directly: lua/plugins/ai.lua:1-21, lua/plugins/sql-plugins.lua:1-23, lua/plugins/autocompletion.lua:100-133.
 
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -663,9 +649,7 @@ Evidence: lua/plugins/treesitter.lua:8-41, lua/plugins/lsp.lua:71-124, lua/plugi
 ## AI integration is intentionally secondary to standard editing workflows
 
 Copilot’s own suggestion panel is disabled: lua/plugins/ai.lua:6-8.
-Instead, AI is exposed through:
-• completion source integration: lua/plugins/autocompletion.lua:113-127
-• CodeCompanion chat/actions/inline prompts: lua/plugins/ai.lua:33-55
+Instead, AI is exposed through completion source integration: lua/plugins/autocompletion.lua:113-127.
 
 That usually indicates a preference for AI assistance that stays inside the normal editor UX rather than dominating it.
 

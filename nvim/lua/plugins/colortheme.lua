@@ -139,6 +139,37 @@ local function setup_tokyonight(variant)
   }
 end
 
+local function setup_gruvbox()
+  vim.o.background = 'dark'
+
+  require('gruvbox').setup {
+    terminal_colors = true,
+    undercurl = true,
+    underline = true,
+    bold = true,
+    italic = {
+      strings = true,
+      emphasis = true,
+      comments = true,
+      operators = false,
+      folds = true,
+    },
+    strikethrough = true,
+    invert_selection = false,
+    invert_signs = false,
+    invert_tabline = false,
+    inverse = true,
+    contrast = '',
+    dim_inactive = false,
+    transparent_mode = transparency_enabled,
+    overrides = {
+      FloatBorder = { bg = 'none' },
+      TelescopeBorder = { bg = 'none' },
+      WinSeparator = { bg = 'none' },
+    },
+  }
+end
+
 local theme_families = {
   {
     name = 'rose-pine',
@@ -180,6 +211,15 @@ for _, family in ipairs(theme_families) do
   end
 end
 
+themes[#themes + 1] = {
+  name = 'gruvbox',
+  family = 'gruvbox',
+  label = 'Gruvbox',
+  variant = 'dark',
+  colorscheme = 'gruvbox',
+  setup = setup_gruvbox,
+}
+
 local theme_by_name = {}
 
 for index, theme in ipairs(themes) do
@@ -188,6 +228,7 @@ for index, theme in ipairs(themes) do
 end
 
 local theme_aliases = {
+  ['gruvbox-dark'] = 'gruvbox',
   ['rose-pine'] = 'rose-pine-main',
   kanagawa = 'kanagawa-wave',
   tokyonight = 'tokyonight-night',
@@ -388,6 +429,7 @@ return {
   name = 'rose-pine',
   priority = 1000,
   dependencies = {
+    'ellisonleao/gruvbox.nvim',
     'rebelot/kanagawa.nvim',
     'folke/tokyonight.nvim',
     'nvim-telescope/telescope.nvim',
