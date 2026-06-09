@@ -23,6 +23,7 @@
 # Subcommands:
 #   (none)                 interactive picker (the popup itself)
 #   rows                   tab-separated rows for fzf (also used by fzf reload)
+#   header                 fzf header text (key hints + profile count + sort)
 #   preview NAME           render NAME's contents into the fzf preview pane
 #   save-interactive       prompt + save (used by ctrl-s)
 #   rename-interactive N   prompt + rename (used by ctrl-r)
@@ -205,6 +206,24 @@ trunc() { # $1=string $2=max
   if [ "${#s}" -gt "$n" ]; then printf '%s…' "${s:0:$((n-1))}"; else printf '%s' "$s"; fi
 }
 
+# Pad to N columns by character count (printf %-Ns pads by bytes, which
+# misaligns columns when names/descriptions contain multibyte characters).
+pad() { # $1=string $2=width
+  local s="$1" n
+  n=$(( $2 - ${#s} ))
+  if [ "$n" -gt 0 ]; then printf '%s%*s' "$s" "$n" ''; else printf '%s' "$s"; fi
+}
+
+# Dialog chrome shared by keys-help and the *-interactive prompts. These only
+# ever run on the popup tty (via fzf execute()), so colors are unconditional.
+DB=$'\x1b[1m'; DC=$'\x1b[36m'; DY=$'\x1b[33m'; DD=$'\x1b[2m'; DR=$'\x1b[0m'
+DRULE='────────────────────────────────────────────'
+dlg() { # $1=title — clear the popup screen and draw a framed dialog header
+  clear 2>/dev/null || printf '\033c'
+  printf '\n  %s┌─ %s%s%s %s%s%s\n' "$DD" "$DB" "$1" "$DR" "$DD" "${DRULE:$(( ${#1} + 4 ))}" "$DR"
+}
+dlg_hint() { printf '  %s%s%s\n' "$DD" "$1" "$DR"; }
+
 case "${1:-menu}" in
   rows)
     # One row per profile: field 1 = bare name (for actions), field 2 = display.
@@ -215,7 +234,7 @@ case "${1:-menu}" in
     declare -A pins=()
     load_pins_into pins
     if [ "${COLOR:-0}" = "1" ]; then
-      y=$'\x1b[33m'; c=$'\x1b[36m'; d=$'\x1b[2m'; r=$'\x1b[0m'
+      y=$'\x1b[1;33m'; c=$'\x1b[1;36m'; d=$'\x1b[2m'; r=$'\x1b[0m'
     else
       y=; c=; d=; r=
     fi
@@ -223,20 +242,34 @@ case "${1:-menu}" in
       [ -e "$f" ] || continue
       name="${f##*/}"; name="${name%.txt}"
       if [ -n "${pins[$name]:-}" ]; then pin_mark="${y}*${r}"; else pin_mark=' '; fi
-      if [ "$name" = "$current" ];   then cur_mark="${c}>${r}";  else cur_mark=' '; fi
+      if [ "$name" = "$current" ];   then cur_mark="${c}▶${r}";  else cur_mark=' '; fi
       read -r ns nw < <(parse_profile "$f" counts)
-      # Pad the visible description text BEFORE wrapping in ANSI so the time
-      # column stays aligned (printf pads by byte count, not visible width).
-      desc_padded="$(printf '%-26s' "$(trunc "$(desc_of "$name")" 26)")"
-      desc_col="${d}${desc_padded}${r}"
-      printf '%s\t %b%b %-18s %2ss/%2sw  %b  %s%s%s\n' \
+      # Pad visible text BEFORE wrapping in ANSI, with pad() (character-aware)
+      # so multibyte names/descriptions don't shift the columns.
+      cnt_col="$(printf '%2s' "$ns")${d}s${r}·$(printf '%-2s' "$nw")${d}w${r}"
+      desc_col="${d}$(pad "$(trunc "$(desc_of "$name")" 26)" 26)${r}"
+      printf '%s\t %b%b %s %b  %b  %s%s%s\n' \
         "$name" \
         "$pin_mark" "$cur_mark" \
-        "$(trunc "$name" 18)" \
-        "$ns" "$nw" \
+        "$(pad "$(trunc "$name" 18)" 18)" \
+        "$cnt_col" \
         "$desc_col" \
         "$d" "$(rel_time "$f")" "$r"
     done < <(sorted_files "$mode")
+    ;;
+
+  header)
+    # Two-line fzf header: key hints, then live state (profile count + sort
+    # mode). Re-rendered via transform-header after actions that change either.
+    hk=$'\x1b[36m'; hd=$'\x1b[2m'; hr=$'\x1b[0m'
+    pair() { printf '%s%s%s %s→%s %s' "$hk" "$1" "$hr" "$hd" "$hr" "$2"; }
+    sep=" ${hd}│${hr} "
+    case "$(sort_mode)" in name) sm="name" ;; *) sm="recent" ;; esac
+    shopt -s nullglob
+    files=("$NAMED_DIR"/*.txt)
+    [ "${#files[@]}" -eq 1 ] && noun="profile" || noun="profiles"
+    printf '%s\n' "$(pair type filter)$sep$(pair tab select)$sep$(pair enter restore)$sep$(pair esc close)$sep$(pair '?' shortcuts)"
+    printf '%s%s %s · sort: %s (ctrl-t)%s\n' "$hd" "${#files[@]}" "$noun" "$sm" "$hr"
     ;;
 
   preview)
@@ -274,11 +307,13 @@ case "${1:-menu}" in
     ;;
 
   save-interactive)
-    printf 'Save current state as: '
+    dlg "save profile"
+    dlg_hint "snapshots the current tmux state · empty cancels"
+    printf '\n  %sname:%s ' "$DC" "$DR"
     read -r n
     [ -n "$n" ] || exit 0
     if "$NAMED_BIN" exists "$n"; then
-      printf '"%s" exists. Overwrite? [y/N] ' "$n"
+      printf '  %s"%s" exists — overwrite?%s [y/N] ' "$DY" "$n" "$DR"
       read -r a
       [ "$a" = y ] || [ "$a" = Y ] || exit 0
       "$NAMED_BIN" save --force "$n"
@@ -290,7 +325,12 @@ case "${1:-menu}" in
   rename-interactive)
     old="${2:-}"
     [ -n "$old" ] || exit 0
-    printf 'Rename "%s" to: ' "$old"
+    dlg "rename profile"
+    if [ -f "$NAMED_DIR/$old.txt" ]; then
+      read -r ns nw < <(parse_profile "$NAMED_DIR/$old.txt" counts)
+      dlg_hint "$old · ${ns}s·${nw}w · empty cancels"
+    fi
+    printf '\n  %snew name:%s ' "$DC" "$DR"
     read -r n
     [ -n "$n" ] || exit 0
     "$NAMED_BIN" rename "$old" "$n"
@@ -300,10 +340,16 @@ case "${1:-menu}" in
     shift
     # fzf passes one name per arg when multi-select is on; just one in single mode.
     [ $# -gt 0 ] || exit 0
+    dlg "delete"
     if [ $# -eq 1 ]; then
-      printf 'Delete profile "%s"? [y/N] ' "$1"
+      # Show what the profile holds before asking.
+      if [ -f "$NAMED_DIR/$1.txt" ]; then
+        COLOR=1 parse_profile "$NAMED_DIR/$1.txt" collapsed | sed 's/^/  /'
+      fi
+      printf '\n  %sdelete "%s"?%s [y/N] ' "$DY" "$1" "$DR"
     else
-      printf 'Delete %d profiles (%s)? [y/N] ' "$#" "$*"
+      for n in "$@"; do printf '  %s•%s %s\n' "$DD" "$DR" "$n"; done
+      printf '\n  %sdelete these %d profiles?%s [y/N] ' "$DY" "$#" "$DR"
     fi
     read -r a
     [ "$a" = y ] || [ "$a" = Y ] || exit 0
@@ -314,11 +360,13 @@ case "${1:-menu}" in
     name="${2:-}"
     [ -n "$name" ] || exit 0
     current_desc="$(desc_of "$name")"
+    dlg "describe profile"
     if [ -n "$current_desc" ]; then
-      printf 'Description for "%s" (empty to clear)\ncurrent: %s\nnew: ' "$name" "$current_desc"
+      dlg_hint "$name · current: $current_desc · empty clears"
     else
-      printf 'Description for "%s" (empty to skip): ' "$name"
+      dlg_hint "$name · empty cancels"
     fi
+    printf '\n  %sdescription:%s ' "$DC" "$DR"
     read -r text
     if [ -z "$text" ] && [ -z "$current_desc" ]; then exit 0; fi
     "$NAMED_BIN" describe "$name" "$text"
@@ -354,31 +402,28 @@ case "${1:-menu}" in
     # Full-screen help shown via fzf's execute() (bound to `?`). Nested tmux
     # display-popups don't render while already inside a popup, so we take over
     # the popup's screen instead, frame it with rules, and wait for a keypress.
-    b=$'\x1b[1m'; c=$'\x1b[36m'; y=$'\x1b[33m'; d=$'\x1b[2m'; r=$'\x1b[0m'
-    rule='────────────────────────────────────────────'
-    row() { printf '     %s%-9s%s %s│%s %s\n' "$2" "$1" "$r" "$d" "$r" "$3"; }
-    clear 2>/dev/null || printf '\033c'
-    printf '\n  %s┌─ %skeyboard shortcuts%s %s%s%s\n' "$d" "$b" "$r" "$d" "${rule:22}" "$r"
-    printf '\n  %sNAVIGATION%s\n' "$b" "$r"
-    row type  "$c" "filter the list"
-    row tab   "$c" "toggle multi-select"
-    row enter "$c" "restore profile"
-    row esc   "$c" "close"
-    printf '\n  %sACTIONS%s\n' "$b" "$r"
-    row ctrl-s "$c" "save current state"
-    row ctrl-r "$c" "rename"
-    row ctrl-x "$c" "delete (multi-select ok)"
-    row ctrl-e "$c" "set / clear description"
-    row ctrl-p "$c" "pin / unpin"
-    row ctrl-t "$c" "cycle sort (recent ⇄ name)"
-    row alt-v  "$c" "cycle preview (active/collapsed/full)"
-    row ctrl-/ "$c" "flip preview pane"
-    printf '\n  %sFROM TMUX%s\n' "$b" "$r"
-    row prefix+G "$y" "open the picker"
-    row prefix+L "$y" "restore most recent"
-    row prefix+W "$y" "write-back current profile"
-    printf '\n  %s└%s%s\n' "$d" "$rule" "$r"
-    printf '  %spress any key to close…%s' "$d" "$r"
+    row() { printf '     %s%-9s%s %s│%s %s\n' "$2" "$1" "$DR" "$DD" "$DR" "$3"; }
+    dlg "keyboard shortcuts"
+    printf '\n  %sNAVIGATION%s\n' "$DB" "$DR"
+    row type  "$DC" "filter the list"
+    row tab   "$DC" "toggle multi-select"
+    row enter "$DC" "restore profile"
+    row esc   "$DC" "close"
+    printf '\n  %sACTIONS%s\n' "$DB" "$DR"
+    row ctrl-s "$DC" "save current state"
+    row ctrl-r "$DC" "rename"
+    row ctrl-x "$DC" "delete (multi-select ok)"
+    row ctrl-e "$DC" "set / clear description"
+    row ctrl-p "$DC" "pin / unpin"
+    row ctrl-t "$DC" "cycle sort (recent ⇄ name)"
+    row alt-v  "$DC" "cycle preview (active/collapsed/full)"
+    row ctrl-/ "$DC" "flip preview pane"
+    printf '\n  %sFROM TMUX%s\n' "$DB" "$DR"
+    row prefix+G "$DY" "open the picker"
+    row prefix+L "$DY" "restore most recent"
+    row prefix+W "$DY" "write-back current profile"
+    printf '\n  %s└%s%s\n' "$DD" "$DRULE" "$DR"
+    printf '  %spress any key to close…%s' "$DD" "$DR"
     read -rsn1
     ;;
 
@@ -395,12 +440,9 @@ case "${1:-menu}" in
       read -rsn1 -p "  press any key to close…"
       exit 0
     fi
-    # Header: keys in cyan, "→" and the " │ " group separators dimmed. fzf
-    # renders ANSI in --header. Reads as: type → filter │ tab → select │ …
-    hk=$'\x1b[36m'; hd=$'\x1b[2m'; hr=$'\x1b[0m'
-    pair() { printf '%s%s%s %s→%s %s' "$hk" "$1" "$hr" "$hd" "$hr" "$2"; }
-    sep=" ${hd}│${hr} "
-    header="$(pair type filter)$sep$(pair tab select)$sep$(pair enter restore)$sep$(pair esc close)$sep$(pair '?' shortcuts)"
+    # Header (key hints + live count/sort state) comes from the `header`
+    # subcommand so the binds below can refresh it via transform-header.
+    header="$("$SELF" header)"
     COLOR=1 "$SELF" rows | COLOR=1 fzf \
       --delimiter='\t' \
       --with-nth=2.. \
@@ -413,12 +455,12 @@ case "${1:-menu}" in
       --preview="COLOR=1 $SELF preview {1}" \
       --preview-window='down,55%,wrap' \
       --bind="enter:become($NAMED_BIN restore {1})" \
-      --bind="ctrl-s:execute($SELF save-interactive)+reload(COLOR=1 $SELF rows)" \
+      --bind="ctrl-s:execute($SELF save-interactive)+reload(COLOR=1 $SELF rows)+transform-header($SELF header)" \
       --bind="ctrl-r:execute($SELF rename-interactive {1})+reload(COLOR=1 $SELF rows)" \
-      --bind="ctrl-x:execute($SELF delete-interactive {+1})+reload(COLOR=1 $SELF rows)" \
+      --bind="ctrl-x:execute($SELF delete-interactive {+1})+reload(COLOR=1 $SELF rows)+transform-header($SELF header)" \
       --bind="ctrl-e:execute($SELF describe-interactive {1})+reload(COLOR=1 $SELF rows)" \
       --bind="ctrl-p:execute-silent($SELF pin-toggle {1})+reload(COLOR=1 $SELF rows)" \
-      --bind="ctrl-t:execute-silent($SELF cycle-sort)+reload(COLOR=1 $SELF rows)" \
+      --bind="ctrl-t:execute-silent($SELF cycle-sort)+reload(COLOR=1 $SELF rows)+transform-header($SELF header)" \
       --bind="alt-v:execute-silent($SELF cycle-view)+refresh-preview" \
       --bind="ctrl-/:change-preview-window(right,60%|down,40%|hidden|down,55%)" \
       --bind="?:execute($SELF keys-help)"
