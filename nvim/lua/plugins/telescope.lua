@@ -11,7 +11,7 @@ end
 return {
   'nvim-telescope/telescope.nvim',
   cmd = 'Telescope',
-  branch = '0.1.x',
+  branch = 'master',
   keys = {
     telescope_key('<leader>sh', 'help_tags', '[S]earch [H]elp'),
     telescope_key('<leader>sk', 'keymaps', '[S]earch [K]eymaps'),
