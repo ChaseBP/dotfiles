@@ -50,5 +50,15 @@ for f in "$PWD/tmux/scripts/"*.sh; do
     ln -sf "$f" "$HOME/.tmux/scripts/$(basename "$f")"
 done
 
+# ------------------------------
+# 5. Expose the launcher on PATH
+# ------------------------------
+# `tmux-sessions` opens the session/profile picker BEFORE attaching, so a
+# session is created only when you choose one (no throwaway session left
+# behind). Type it from a plain shell; inside tmux it mirrors prefix + G.
+echo "🔗 Linking tmux-sessions command..."
+mkdir -p "$HOME/.local/bin"
+ln -sf "$PWD/tmux/scripts/tmux-sessions.sh" "$HOME/.local/bin/tmux-sessions"
+
 echo "✅ tmux setup complete"
 echo "👉 Start tmux and press Prefix + I to install plugins"
