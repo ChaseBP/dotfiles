@@ -3,21 +3,26 @@
 #
 # Meant to be launched from a tmux `display-popup` (see tmux.conf, prefix + G).
 # Lists every saved profile with a live preview of its sessions/windows, and
-# lets you restore/save/rename/delete/describe/pin. The actual work is
-# delegated to resurrect-named.sh, which this also queries for the profiles dir.
+# lets you restore/save/rename/delete/describe/pin/copy/diff. The actual work
+# is delegated to resurrect-named.sh, which this also queries for the dir.
 #
 # Keys inside the popup:
-#   type           filter
+#   type           filter the list
 #   tab            toggle multi-select
-#   enter          restore
+#   enter          restore (asks to confirm first)
 #   ctrl-s         save current state under a new name
+#   ctrl-w         write-back the current (▶) profile from the live state
 #   ctrl-r         rename selected profile
-#   ctrl-x         delete selected (or all selected if multi)
-#   ctrl-e         set/clear description for selected
+#   ctrl-x         delete selected → trash (or all selected if multi)
+#   ctrl-e         set/clear description (applies to all selected)
+#   ctrl-y         copy / duplicate selected profile
+#   ctrl-p         toggle pin on selected (multi ok)
+#   ctrl-g         search inside snapshots (filters the list)
+#   alt-d          diff two tab-selected profiles
 #   ctrl-t         cycle sort (mtime <-> name)
-#   ctrl-p         toggle pin on selected
 #   alt-v          cycle preview view (active/collapsed/full)
-#   ctrl-/         cycle preview pane position
+#   ctrl-/         cycle preview pane (right/down/hidden)
+#   ?              full keyboard help
 #   esc            close
 #
 # Subcommands:
@@ -25,11 +30,17 @@
 #   rows                   tab-separated rows for fzf (also used by fzf reload)
 #   header                 fzf header text (key hints + profile count + sort)
 #   preview NAME           render NAME's contents into the fzf preview pane
+#   dump NAME              color-free structural render (used by `diff`)
 #   save-interactive       prompt + save (used by ctrl-s)
 #   rename-interactive N   prompt + rename (used by ctrl-r)
 #   delete-interactive N…  prompt + delete (used by ctrl-x; supports multi)
-#   describe-interactive N prompt + describe (used by ctrl-e)
-#   pin-toggle N           toggle pin on N (used by ctrl-p)
+#   describe-interactive N prompt + describe (used by ctrl-e; supports multi)
+#   restore-interactive N  confirm + restore (used by enter)
+#   copy-interactive N     prompt + copy (used by ctrl-y)
+#   diff-interactive A B   show a diff of two profiles (used by alt-d)
+#   find-interactive       prompt + set/clear the content filter (used by ctrl-g)
+#   write-back-interactive confirm + re-save the current profile (used by ctrl-w)
+#   pin-toggle N…          toggle pin on N (used by ctrl-p; supports multi)
 #   cycle-sort             advance the persistent sort mode (used by ctrl-t)
 #   cycle-view             advance the persistent preview mode (used by alt-v)
 set -euo pipefail
@@ -45,6 +56,8 @@ NAMED_DIR="$("$NAMED_BIN" dir)"
 PINS_FILE="$NAMED_DIR/.pins"
 SORT_FILE="${TMPDIR:-/tmp}/resurrect-menu-sort.${USER:-$(id -u)}"
 VIEW_FILE="${TMPDIR:-/tmp}/resurrect-menu-view.${USER:-$(id -u)}"
+# Transient content filter (set by ctrl-g). Cleared each time the popup opens.
+FILTER_FILE="${TMPDIR:-/tmp}/resurrect-menu-filter.${USER:-$(id -u)}"
 
 sort_mode() { cat "$SORT_FILE" 2>/dev/null || echo mtime; }
 set_sort()  { printf '%s' "$1" > "$SORT_FILE"; }
@@ -52,6 +65,8 @@ set_sort()  { printf '%s' "$1" > "$SORT_FILE"; }
 # Preview view mode — persisted so the chosen preference sticks. Cycled by alt-v.
 view_mode() { cat "$VIEW_FILE" 2>/dev/null || echo active; }
 set_view()  { printf '%s' "$1" > "$VIEW_FILE"; }
+
+content_filter() { cat "$FILTER_FILE" 2>/dev/null || true; }
 
 # Human-friendly age of a file from its mtime.
 rel_time() { # $1=file
@@ -66,6 +81,48 @@ rel_time() { # $1=file
   fi
 }
 
+# Count sessions/windows in one snapshot with awk (no python3 startup cost).
+# Mirrors resurrect-named.sh's counts(). Prints "<sessions> <windows>".
+counts_awk() { # $1=file
+  awk -F'\t' '
+    $1=="pane" || $1=="window" { s[$2]=1; w[$2 SUBSEP $3]=1 }
+    END { ns=0; for (k in s) ns++; nw=0; for (k in w) nw++; print ns, nw }
+  ' "$1" 2>/dev/null || echo "0 0"
+}
+
+# Count every snapshot in ONE awk pass, keyed by filename. Replaces a per-row
+# python3 spawn in `rows` (which cost ~30-50ms each → seconds for 50 profiles).
+# Emits: "<file>\t<sessions>\t<windows>"; files with no records are omitted
+# (callers default those to "0 0").
+counts_all() { # $@=files
+  [ "$#" -gt 0 ] || return 0
+  awk -F'\t' '
+    ($1=="pane" || $1=="window") {
+      sk = FILENAME SUBSEP $2;          if (!(sk in S)) { S[sk]=1; ns[FILENAME]++ }
+      wk = FILENAME SUBSEP $2 SUBSEP $3; if (!(wk in W)) { W[wk]=1; nw[FILENAME]++ }
+    }
+    END { for (f in ns) printf "%s\t%d\t%d\n", f, ns[f], nw[f] }
+  ' "$@" 2>/dev/null || true
+}
+
+# Degraded preview when python3 is unavailable: a basic awk listing plus a hint,
+# so the pane is informative instead of blank. The rich renderer below is used
+# whenever python3 is present.
+parse_profile_nopy() { # $1=file $2=mode
+  case "$2" in
+    counts) counts_awk "$1" ;;
+    *)
+      printf '(python3 not found — basic view; install python3 for the full preview)\n\n'
+      awk -F'\t' '
+        $1=="window" && NF>=4 { s=$2; if (!(s in seen)) { seen[s]=1; ord[++n]=s }
+                                lines[s]=lines[s] sprintf("   %s %s\n", $3, substr($4,2)) }
+        $1=="pane"   && NF>=3 { s=$2; if (!(s in seen)) { seen[s]=1; ord[++n]=s } }
+        END { for (i=1;i<=n;i++) { printf "* %s\n", ord[i]; printf "%s", lines[ord[i]] } }
+      ' "$1" 2>/dev/null || printf '(unreadable snapshot)\n'
+      ;;
+  esac
+}
+
 # Parse a resurrect snapshot. Modes:
 #   counts     -> "<sessions> <windows>" (one line, for the picker rows)
 #   full       -> every session, every window (program + cwd)
@@ -77,6 +134,11 @@ rel_time() { # $1=file
 #   window : f[1]=session f[2]=window_index f[3]=:window_name
 #   state  : f[1]=active (client) session  — used to pick the "active" session
 parse_profile() { # $1=file  $2=mode
+  # Rich rendering needs python3; degrade gracefully if it's missing.
+  if ! command -v python3 >/dev/null 2>&1; then
+    parse_profile_nopy "$1" "$2"
+    return
+  fi
   python3 - "$1" "$2" <<'PY'
 import sys, os, signal
 # Restore default SIGPIPE so piping to `head` doesn't dump a BrokenPipeError.
@@ -215,14 +277,34 @@ pad() { # $1=string $2=width
 }
 
 # Dialog chrome shared by keys-help and the *-interactive prompts. These only
-# ever run on the popup tty (via fzf execute()), so colors are unconditional.
-DB=$'\x1b[1m'; DC=$'\x1b[36m'; DY=$'\x1b[33m'; DD=$'\x1b[2m'; DR=$'\x1b[0m'
+# ever run on the popup tty (via fzf execute()), so colors are on unless the
+# user opted out via NO_COLOR.
+if [ -n "${NO_COLOR:-}" ]; then
+  DB=; DC=; DY=; DD=; DR=
+else
+  DB=$'\x1b[1m'; DC=$'\x1b[36m'; DY=$'\x1b[33m'; DD=$'\x1b[2m'; DR=$'\x1b[0m'
+fi
 DRULE='────────────────────────────────────────────'
 dlg() { # $1=title — clear the popup screen and draw a framed dialog header
   clear 2>/dev/null || printf '\033c'
   printf '\n  %s┌─ %s%s%s %s%s%s\n' "$DD" "$DB" "$1" "$DR" "$DD" "${DRULE:$(( ${#1} + 4 ))}" "$DR"
 }
 dlg_hint() { printf '  %s%s%s\n' "$DD" "$1" "$DR"; }
+
+# Prompt + read a line with readline editing and an editable pre-filled value.
+# The prompt MUST be passed through `read -p` (not printf'd separately) so
+# readline can measure its width — otherwise moving the cursor back over the
+# pre-filled text corrupts the line / sticks the cursor under the label. Color
+# escapes are wrapped in \001..\002 so readline counts them as zero-width.
+ask_prefill() { # $1=dest var  $2=label  $3=initial value
+  local _p
+  _p="$(printf '\n  \001%s\002%s\001%s\002 ' "$DC" "$2" "$DR")"
+  IFS= read -e -r -p "$_p" -i "$3" "$1"
+}
+
+# Profile/live session helpers for the restore collision warning + drift hints.
+live_sessions()    { tmux list-sessions -F '#{session_name}' 2>/dev/null | LC_ALL=C sort || true; }
+profile_sessions() { awk -F'\t' '$1=="window"||$1=="pane"{print $2}' "$1" 2>/dev/null | LC_ALL=C sort -u || true; }
 
 case "${1:-menu}" in
   rows)
@@ -231,45 +313,89 @@ case "${1:-menu}" in
     # launched with --ansi, so they render in the picker pane.
     mode="$(sort_mode)"
     current="$($NAMED_BIN current 2>/dev/null || true)"
+    # Responsive columns: widen name/desc on a roomy popup, but keep the
+    # original 18/26 on narrow popups so the layout there is unchanged. COLS is
+    # threaded in from the launcher (the popup width at open time).
+    cols="${COLS:-80}"
+    name_w=18; desc_w=26
+    avail=$(( cols - 30 ))
+    if [ "$avail" -gt 44 ]; then
+      extra=$(( (avail - 44) / 2 ))
+      name_w=$(( 18 + extra )); [ "$name_w" -gt 40 ] && name_w=40
+      desc_w=$(( 26 + extra )); [ "$desc_w" -gt 60 ] && desc_w=60
+    fi
     declare -A pins=()
     load_pins_into pins
+    # Optional content filter (ctrl-g): restrict to profiles whose snapshot
+    # matches the pattern, via resurrect-named.sh's `find`.
+    filter="$(content_filter)"
+    declare -A match=()
+    if [ -n "$filter" ]; then
+      while IFS= read -r m; do [ -n "$m" ] && match["$m"]=1; done < <("$NAMED_BIN" find "$filter" 2>/dev/null)
+    fi
     if [ "${COLOR:-0}" = "1" ]; then
       y=$'\x1b[1;33m'; c=$'\x1b[1;36m'; d=$'\x1b[2m'; r=$'\x1b[0m'
     else
       y=; c=; d=; r=
     fi
-    while IFS= read -r f; do
+    mapfile -t files < <(sorted_files "$mode")
+    # All session/window counts in one awk pass instead of one python3 per row.
+    declare -A CNT=()
+    if [ "${#files[@]}" -gt 0 ]; then
+      while IFS=$'\t' read -r cf cns cnw; do CNT["$cf"]="$cns $cnw"; done < <(counts_all "${files[@]}")
+    fi
+    for f in "${files[@]}"; do
       [ -e "$f" ] || continue
       name="${f##*/}"; name="${name%.txt}"
+      if [ -n "$filter" ] && [ -z "${match[$name]:-}" ]; then continue; fi
       if [ -n "${pins[$name]:-}" ]; then pin_mark="${y}*${r}"; else pin_mark=' '; fi
       if [ "$name" = "$current" ];   then cur_mark="${c}▶${r}";  else cur_mark=' '; fi
-      read -r ns nw < <(parse_profile "$f" counts)
+      read -r ns nw <<< "${CNT[$f]:-0 0}"
       # Pad visible text BEFORE wrapping in ANSI, with pad() (character-aware)
       # so multibyte names/descriptions don't shift the columns.
       cnt_col="$(printf '%2s' "$ns")${d}s${r}·$(printf '%-2s' "$nw")${d}w${r}"
-      desc_col="${d}$(pad "$(trunc "$(desc_of "$name")" 26)" 26)${r}"
+      desc_col="${d}$(pad "$(trunc "$(desc_of "$name")" "$desc_w")" "$desc_w")${r}"
       printf '%s\t %b%b %s %b  %b  %s%s%s\n' \
         "$name" \
         "$pin_mark" "$cur_mark" \
-        "$(pad "$(trunc "$name" 18)" 18)" \
+        "$(pad "$(trunc "$name" "$name_w")" "$name_w")" \
         "$cnt_col" \
         "$desc_col" \
         "$d" "$(rel_time "$f")" "$r"
-    done < <(sorted_files "$mode")
+    done
     ;;
 
   header)
     # Two-line fzf header: key hints, then live state (profile count + sort
-    # mode). Re-rendered via transform-header after actions that change either.
-    hk=$'\x1b[36m'; hd=$'\x1b[2m'; hr=$'\x1b[0m'
+    # mode + any active filter). Re-rendered via transform-header after actions
+    # that change either.
+    if [ -n "${NO_COLOR:-}" ]; then hk=; hd=; hr=; else hk=$'\x1b[36m'; hd=$'\x1b[2m'; hr=$'\x1b[0m'; fi
     pair() { printf '%s%s%s %s→%s %s' "$hk" "$1" "$hr" "$hd" "$hr" "$2"; }
     sep=" ${hd}│${hr} "
-    case "$(sort_mode)" in name) sm="name" ;; *) sm="recent" ;; esac
     shopt -s nullglob
     files=("$NAMED_DIR"/*.txt)
-    [ "${#files[@]}" -eq 1 ] && noun="profile" || noun="profiles"
+    total=${#files[@]}
+    if [ "$total" -eq 0 ]; then
+      # Empty state — also reached after deleting the last profile inside fzf.
+      printf '%s\n' "$(pair ctrl-s save)$sep$(pair esc close)"
+      printf '%sno profiles yet — press ctrl-s to save the current tmux state%s\n' "$hd" "$hr"
+      exit 0
+    fi
+    case "$(sort_mode)" in name) sm="name" ;; *) sm="recent" ;; esac
+    filter="$(content_filter)"
+    if [ -n "$filter" ]; then
+      visible=0
+      while IFS= read -r m; do [ -n "$m" ] && visible=$((visible + 1)); done < <("$NAMED_BIN" find "$filter" 2>/dev/null)
+    else
+      visible="$total"
+    fi
+    [ "$total" -eq 1 ] && noun="profile" || noun="profiles"
     printf '%s\n' "$(pair type filter)$sep$(pair tab select)$sep$(pair enter restore)$sep$(pair esc close)$sep$(pair '?' shortcuts)"
-    printf '%s%s %s · sort: %s (ctrl-t)%s\n' "$hd" "${#files[@]}" "$noun" "$sm" "$hr"
+    if [ -n "$filter" ]; then
+      printf '%s%s/%s %s · sort: %s (ctrl-t) · filter: %s (ctrl-g clears)%s\n' "$hd" "$visible" "$total" "$noun" "$sm" "$filter" "$hr"
+    else
+      printf '%s%s %s · sort: %s (ctrl-t)%s\n' "$hd" "$total" "$noun" "$sm" "$hr"
+    fi
     ;;
 
   preview)
@@ -302,8 +428,27 @@ case "${1:-menu}" in
       printf '%s%s%s\n' "$d" "$desc" "$r"
     fi
     view="$(view_mode)"
-    printf '%sview: %s  ·  alt-v to change%s\n\n' "$d" "$view" "$r"
+    printf '%sview: %s  ·  alt-v to change%s\n' "$d" "$view" "$r"
+    # For the current profile, show whether the live tmux state has drifted.
+    if [ "$name" = "$cur" ] && [ -n "${TMUX:-}" ]; then
+      if [ -n "$("$NAMED_BIN" status-indicator 2>/dev/null)" ]; then
+        printf '%slive: drifted from this profile · prefix+W to write back%s\n' "$y" "$r"
+      else
+        printf '%slive: in sync with this profile%s\n' "$d" "$r"
+      fi
+    fi
+    printf '\n'
     parse_profile "$file" "$view"
+    ;;
+
+  dump)
+    # Color-free, view-independent structural render with no volatile header —
+    # used by `resurrect-named.sh diff` so diffs aren't polluted by timestamps,
+    # badges, or the current preview mode.
+    name="${2:-}"
+    file="$NAMED_DIR/$name.txt"
+    [ -f "$file" ] || { echo "(no such profile)"; exit 0; }
+    COLOR=0 parse_profile "$file" full
     ;;
 
   save-interactive)
@@ -330,9 +475,10 @@ case "${1:-menu}" in
       read -r ns nw < <(parse_profile "$NAMED_DIR/$old.txt" counts)
       dlg_hint "$old · ${ns}s·${nw}w · empty cancels"
     fi
-    printf '\n  %snew name:%s ' "$DC" "$DR"
-    read -r n
+    # Pre-fill the old name so it can be edited in place instead of retyped.
+    ask_prefill n "new name:" "$old"
     [ -n "$n" ] || exit 0
+    [ "$n" = "$old" ] && exit 0
     "$NAMED_BIN" rename "$old" "$n"
     ;;
 
@@ -346,10 +492,18 @@ case "${1:-menu}" in
       if [ -f "$NAMED_DIR/$1.txt" ]; then
         COLOR=1 parse_profile "$NAMED_DIR/$1.txt" collapsed | sed 's/^/  /'
       fi
-      printf '\n  %sdelete "%s"?%s [y/N] ' "$DY" "$1" "$DR"
+      printf '\n  %sdelete "%s" → trash?%s [y/N] ' "$DY" "$1" "$DR"
     else
-      for n in "$@"; do printf '  %s•%s %s\n' "$DD" "$DR" "$n"; done
-      printf '\n  %sdelete these %d profiles?%s [y/N] ' "$DY" "$#" "$DR"
+      # Summarize each profile (counts) so a bulk delete isn't blind.
+      for n in "$@"; do
+        if [ -f "$NAMED_DIR/$n.txt" ]; then
+          read -r ns nw < <(parse_profile "$NAMED_DIR/$n.txt" counts)
+          printf '  %s•%s %s   %s%ss·%sw%s\n' "$DD" "$DR" "$(pad "$n" 20)" "$DD" "$ns" "$nw" "$DR"
+        else
+          printf '  %s•%s %s\n' "$DD" "$DR" "$n"
+        fi
+      done
+      printf '\n  %sdelete these %d profiles → trash?%s [y/N] ' "$DY" "$#" "$DR"
     fi
     read -r a
     [ "$a" = y ] || [ "$a" = Y ] || exit 0
@@ -357,29 +511,136 @@ case "${1:-menu}" in
     ;;
 
   describe-interactive)
+    shift
+    [ $# -gt 0 ] || exit 0
+    current_desc=""
+    [ $# -eq 1 ] && current_desc="$(desc_of "$1")"
+    dlg "describe profile"
+    if [ $# -eq 1 ]; then
+      if [ -n "$current_desc" ]; then
+        dlg_hint "$1 · edit below · empty clears"
+      else
+        dlg_hint "$1 · empty cancels"
+      fi
+    else
+      dlg_hint "$# profiles · same text applied to all · empty clears"
+    fi
+    # Pre-fill the current description (single target) so it can be edited.
+    ask_prefill text "description:" "$current_desc"
+    if [ -z "$text" ] && [ $# -eq 1 ] && [ -z "$current_desc" ]; then exit 0; fi
+    for name in "$@"; do "$NAMED_BIN" describe "$name" "$text"; done
+    ;;
+
+  restore-interactive)
+    # Bound to enter (via become). Confirms first — restore spawns/clobbers live
+    # sessions, so it shouldn't fire on a stray keypress — and keeps the popup
+    # open with the error if restore fails (become would otherwise just vanish).
     name="${2:-}"
     [ -n "$name" ] || exit 0
-    current_desc="$(desc_of "$name")"
-    dlg "describe profile"
-    if [ -n "$current_desc" ]; then
-      dlg_hint "$name · current: $current_desc · empty clears"
-    else
-      dlg_hint "$name · empty cancels"
+    dlg "restore profile"
+    if [ -f "$NAMED_DIR/$name.txt" ]; then
+      COLOR=1 parse_profile "$NAMED_DIR/$name.txt" collapsed | sed 's/^/  /'
+      # Warn when some of these sessions are already open: restore merges into
+      # the live server rather than replacing it, so existing sessions persist.
+      if [ -n "${TMUX:-}" ]; then
+        clash="$(comm -12 <(live_sessions) <(profile_sessions "$NAMED_DIR/$name.txt") 2>/dev/null | sed '/^$/d' | paste -sd ',' | sed 's/,/, /g')"
+        if [ -n "$clash" ]; then
+          printf '\n  %s⚠ already open: %s%s\n' "$DY" "$clash" "$DR"
+          printf '  %srestore merges into the live server (existing sessions kept)%s\n' "$DD" "$DR"
+        fi
+      fi
     fi
-    printf '\n  %sdescription:%s ' "$DC" "$DR"
-    read -r text
-    if [ -z "$text" ] && [ -z "$current_desc" ]; then exit 0; fi
-    "$NAMED_BIN" describe "$name" "$text"
+    printf '\n  %srestore "%s"?%s [Y/n] ' "$DC" "$name" "$DR"
+    read -r a
+    case "$a" in n|N) exit 0 ;; esac
+    if ! "$NAMED_BIN" restore "$name"; then
+      printf '\n  %srestore failed — press any key…%s' "$DY" "$DR"
+      read -rsn1
+      exit 1
+    fi
+    ;;
+
+  copy-interactive)
+    src="${2:-}"
+    [ -n "$src" ] || exit 0
+    dlg "copy profile"
+    dlg_hint "$src → new name · empty cancels"
+    ask_prefill dst "new name:" "${src}-copy"
+    [ -n "$dst" ] || exit 0
+    "$NAMED_BIN" copy "$src" "$dst"
+    ;;
+
+  diff-interactive)
+    shift
+    if [ $# -ne 2 ]; then
+      dlg "diff"
+      dlg_hint "tab-select exactly two profiles, then alt-d"
+      printf '\n  %spress any key…%s' "$DD" "$DR"
+      read -rsn1
+      exit 0
+    fi
+    out="$("$NAMED_BIN" diff "$1" "$2")"
+    if command -v less >/dev/null 2>&1; then
+      printf '%s\n' "$out" | less -R
+    else
+      clear 2>/dev/null || printf '\033c'
+      printf '%s\n\n  %spress any key…%s' "$out" "$DD" "$DR"
+      read -rsn1
+    fi
+    ;;
+
+  find-interactive)
+    cur="$(content_filter)"
+    dlg "search snapshots"
+    dlg_hint "match text inside snapshots (sessions, paths, commands) · empty clears"
+    ask_prefill pat "pattern:" "$cur"
+    if [ -z "$pat" ]; then
+      rm -f "$FILTER_FILE"
+    else
+      printf '%s' "$pat" > "$FILTER_FILE"
+    fi
+    ;;
+
+  write-back-interactive)
+    # Bound to ctrl-w. Re-save the CURRENT (▶) profile from the live tmux state,
+    # i.e. prefix+W from inside the popup. Overwrites the saved snapshot, so it
+    # confirms first and shows saved→live counts. Uses --force to avoid the
+    # backend's tmux confirm-before (a nested popup won't render in here).
+    cur="$($NAMED_BIN current 2>/dev/null || true)"
+    dlg "write back"
+    if [ -z "$cur" ]; then
+      dlg_hint "no current profile — restore one (enter) or save one (ctrl-s) first"
+      printf '\n  %spress any key…%s' "$DD" "$DR"
+      read -rsn1
+      exit 0
+    fi
+    if [ ! -f "$NAMED_DIR/$cur.txt" ]; then
+      dlg_hint "current profile '$cur' has no saved snapshot to overwrite"
+      printf '\n  %spress any key…%s' "$DD" "$DR"
+      read -rsn1
+      exit 0
+    fi
+    read -r sns snw < <(parse_profile "$NAMED_DIR/$cur.txt" counts)
+    lns="$(tmux list-sessions -F x 2>/dev/null | wc -l | tr -d ' ')"
+    lnw="$(tmux list-windows -a -F x 2>/dev/null | wc -l | tr -d ' ')"
+    dlg_hint "overwrite the current profile's saved snapshot with the live state"
+    printf '\n  %s▶ %s%s   saved %ss·%sw  →  live %ss·%sw\n' "$DC" "$cur" "$DR" "$sns" "$snw" "$lns" "$lnw"
+    printf '\n  %swrite back to "%s"?%s [y/N] ' "$DY" "$cur" "$DR"
+    read -r a
+    [ "$a" = y ] || [ "$a" = Y ] || exit 0
+    "$NAMED_BIN" save-current --force
     ;;
 
   pin-toggle)
-    name="${2:-}"
-    [ -n "$name" ] || exit 0
-    if [ -f "$PINS_FILE" ] && grep -qxF "$name" "$PINS_FILE" 2>/dev/null; then
-      "$NAMED_BIN" unpin "$name"
-    else
-      "$NAMED_BIN" pin "$name"
-    fi
+    shift
+    [ $# -gt 0 ] || exit 0
+    for name in "$@"; do
+      if [ -f "$PINS_FILE" ] && grep -qxF "$name" "$PINS_FILE" 2>/dev/null; then
+        "$NAMED_BIN" unpin "$name"
+      else
+        "$NAMED_BIN" pin "$name"
+      fi
+    done
     ;;
 
   cycle-sort)
@@ -399,32 +660,60 @@ case "${1:-menu}" in
     ;;
 
   keys-help)
-    # Full-screen help shown via fzf's execute() (bound to `?`). Nested tmux
-    # display-popups don't render while already inside a popup, so we take over
-    # the popup's screen instead, frame it with rules, and wait for a keypress.
-    row() { printf '     %s%-9s%s %s│%s %s\n' "$2" "$1" "$DR" "$DD" "$DR" "$3"; }
-    dlg "keyboard shortcuts"
-    printf '\n  %sNAVIGATION%s\n' "$DB" "$DR"
-    row type  "$DC" "filter the list"
-    row tab   "$DC" "toggle multi-select"
-    row enter "$DC" "restore profile"
-    row esc   "$DC" "close"
-    printf '\n  %sACTIONS%s\n' "$DB" "$DR"
-    row ctrl-s "$DC" "save current state"
-    row ctrl-r "$DC" "rename"
-    row ctrl-x "$DC" "delete (multi-select ok)"
-    row ctrl-e "$DC" "set / clear description"
-    row ctrl-p "$DC" "pin / unpin"
-    row ctrl-t "$DC" "cycle sort (recent ⇄ name)"
-    row alt-v  "$DC" "cycle preview (active/collapsed/full)"
-    row ctrl-/ "$DC" "flip preview pane"
-    printf '\n  %sFROM TMUX%s\n' "$DB" "$DR"
-    row prefix+G "$DY" "open the picker"
-    row prefix+L "$DY" "restore most recent"
-    row prefix+W "$DY" "write-back current profile"
-    printf '\n  %s└%s%s\n' "$DD" "$DRULE" "$DR"
-    printf '  %spress any key to close…%s' "$DD" "$DR"
-    read -rsn1
+    # Help shown via fzf's execute() (bound to `?`). The popup is short, so a
+    # plain printf scrolls the top (NAVIGATION + ACTIONS) off-screen — pipe the
+    # body through a pager so every key is reachable with ↑/↓ regardless of
+    # popup height. Falls back to clear+printf if `less` is missing. (Nested
+    # display-popups don't render inside a popup, so we own the popup's screen.)
+    emit_help() {
+      local t="keyboard shortcuts"
+      row() { printf '     %s%-10s%s %s│%s %s\n' "$2" "$1" "$DR" "$DD" "$DR" "$3"; }
+      printf '\n  %s┌─ %s%s%s %s%s%s\n' "$DD" "$DB" "$t" "$DR" "$DD" "${DRULE:$(( ${#t} + 4 ))}" "$DR"
+      printf '\n  %sNAVIGATION%s\n' "$DB" "$DR"
+      row type      "$DC" "filter the list"
+      row up/down   "$DC" "move selection (ctrl-j / ctrl-k)"
+      row pgup/dn   "$DC" "jump a page"
+      row tab       "$DC" "toggle multi-select"
+      row enter     "$DC" "restore profile (confirms first)"
+      row sh-up/dn  "$DC" "scroll the preview pane"
+      row '?'       "$DC" "show this help"
+      row esc       "$DC" "close the popup"
+      printf '\n  %sACTIONS%s\n' "$DB" "$DR"
+      row ctrl-s "$DC" "save current state as a new profile"
+      row ctrl-w "$DC" "write-back current ▶ profile (overwrite from live)"
+      row ctrl-r "$DC" "rename"
+      row ctrl-x "$DC" "delete → trash (multi-select ok)"
+      row ctrl-e "$DC" "set / clear description (multi ok)"
+      row ctrl-y "$DC" "copy / duplicate profile"
+      row ctrl-p "$DC" "pin / unpin (multi ok)"
+      row ctrl-g "$DC" "search inside snapshots (filter)"
+      row alt-d  "$DC" "diff two selected profiles"
+      row ctrl-t "$DC" "cycle sort (recent ⇄ name)"
+      row alt-v  "$DC" "cycle preview (active/collapsed/full)"
+      row ctrl-/ "$DC" "cycle preview pane (right/down/hidden)"
+      printf '\n  %sMARKERS%s\n' "$DB" "$DR"
+      printf '     %s▶%s current   %s*%s pinned   %s●%s session   %s*%s after the name = live drifted\n' "$DC" "$DR" "$DY" "$DR" "$DC" "$DR" "$DY" "$DR"
+      printf '\n  %sFROM TMUX%s\n' "$DB" "$DR"
+      row prefix+G "$DY" "open this picker"
+      row prefix+S "$DY" "save current state (named)"
+      row prefix+R "$DY" "restore a named profile"
+      row prefix+L "$DY" "restore most recent"
+      row prefix+W "$DY" "write-back current profile"
+      row prefix+D "$DY" "delete a profile"
+      printf '\n  %sMORE (CLI: resurrect-named.sh)%s\n' "$DB" "$DR"
+      printf '     %sexport · import · prune · find · diff · untrash%s\n' "$DD" "$DR"
+      printf '\n  %s└%s%s\n' "$DD" "$DRULE" "$DR"
+    }
+    if command -v less >/dev/null 2>&1; then
+      # -R: keep colors · custom prompt instead of less's ':' · no -F so it
+      # always pages (waits) even when the content happens to fit one screen.
+      emit_help | less -R -P'  ↑/↓ scroll  ·  q to close '
+    else
+      clear 2>/dev/null || printf '\033c'
+      emit_help
+      printf '\n  %spress any key to close…%s' "$DD" "$DR"
+      read -rsn1
+    fi
     ;;
 
   menu|*)
@@ -433,6 +722,9 @@ case "${1:-menu}" in
       read -rsn1 -p "  press any key to close…"
       exit 0
     fi
+    # The content filter is transient — don't let a stale one from a previous
+    # popup hide profiles on the next open.
+    rm -f "$FILTER_FILE"
     if [ -z "$("$SELF" rows)" ]; then
       printf '\n  No saved profiles yet.\n\n'
       printf '  Save the current tmux state with  prefix + S  (named save),\n'
@@ -440,10 +732,13 @@ case "${1:-menu}" in
       read -rsn1 -p "  press any key to close…"
       exit 0
     fi
+    # Popup width at open time — threaded into rows so columns can be responsive
+    # (the popup doesn't resize mid-session, so capturing it once is enough).
+    cols="$(tput cols 2>/dev/null || echo 80)"
     # Header (key hints + live count/sort state) comes from the `header`
     # subcommand so the binds below can refresh it via transform-header.
     header="$("$SELF" header)"
-    COLOR=1 "$SELF" rows | COLOR=1 fzf \
+    COLS="$cols" COLOR=1 "$SELF" rows | COLS="$cols" COLOR=1 fzf \
       --delimiter='\t' \
       --with-nth=2.. \
       --no-sort \
@@ -454,15 +749,21 @@ case "${1:-menu}" in
       --header="$header" \
       --preview="COLOR=1 $SELF preview {1}" \
       --preview-window='down,55%,wrap' \
-      --bind="enter:become($NAMED_BIN restore {1})" \
-      --bind="ctrl-s:execute($SELF save-interactive)+reload(COLOR=1 $SELF rows)+transform-header($SELF header)" \
-      --bind="ctrl-r:execute($SELF rename-interactive {1})+reload(COLOR=1 $SELF rows)" \
-      --bind="ctrl-x:execute($SELF delete-interactive {+1})+reload(COLOR=1 $SELF rows)+transform-header($SELF header)" \
-      --bind="ctrl-e:execute($SELF describe-interactive {1})+reload(COLOR=1 $SELF rows)" \
-      --bind="ctrl-p:execute-silent($SELF pin-toggle {1})+reload(COLOR=1 $SELF rows)" \
-      --bind="ctrl-t:execute-silent($SELF cycle-sort)+reload(COLOR=1 $SELF rows)+transform-header($SELF header)" \
+      --bind="enter:become($SELF restore-interactive {1})" \
+      --bind="ctrl-s:execute($SELF save-interactive)+reload(COLS=$cols COLOR=1 $SELF rows)+transform-header($SELF header)" \
+      --bind="ctrl-w:execute($SELF write-back-interactive)+reload(COLS=$cols COLOR=1 $SELF rows)+refresh-preview" \
+      --bind="ctrl-r:execute($SELF rename-interactive {1})+reload(COLS=$cols COLOR=1 $SELF rows)" \
+      --bind="ctrl-x:execute($SELF delete-interactive {+1})+reload(COLS=$cols COLOR=1 $SELF rows)+transform-header($SELF header)" \
+      --bind="ctrl-e:execute($SELF describe-interactive {+1})+reload(COLS=$cols COLOR=1 $SELF rows)" \
+      --bind="ctrl-y:execute($SELF copy-interactive {1})+reload(COLS=$cols COLOR=1 $SELF rows)+transform-header($SELF header)" \
+      --bind="alt-d:execute($SELF diff-interactive {+1})" \
+      --bind="ctrl-g:execute($SELF find-interactive)+reload(COLS=$cols COLOR=1 $SELF rows)+transform-header($SELF header)" \
+      --bind="ctrl-p:execute-silent($SELF pin-toggle {+1})+reload(COLS=$cols COLOR=1 $SELF rows)" \
+      --bind="ctrl-t:execute-silent($SELF cycle-sort)+reload(COLS=$cols COLOR=1 $SELF rows)+transform-header($SELF header)" \
       --bind="alt-v:execute-silent($SELF cycle-view)+refresh-preview" \
       --bind="ctrl-/:change-preview-window(right,60%|down,40%|hidden|down,55%)" \
+      --bind="shift-up:preview-up" \
+      --bind="shift-down:preview-down" \
       --bind="?:execute($SELF keys-help)"
     ;;
 esac

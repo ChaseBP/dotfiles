@@ -6,7 +6,9 @@
 # save.sh/restore.sh so you can keep several *named* snapshots — each with
 # an optional description and pin — and restore any one of them on demand.
 #
-# Run `resurrect-named.sh help` for the full command reference.
+# Deleting a profile moves it to a `.trash/` sidecar (recoverable with
+# `untrash`) rather than removing it outright. Run `resurrect-named.sh help`
+# for the full command reference.
 set -euo pipefail
 
 print_help() {
@@ -18,7 +20,7 @@ Usage:
   restore <name>                restore the <name> snapshot
   rename <old> <new>            rename a saved profile (and metadata)
   list                          list saved profile names
-  delete <name>                 remove a saved profile (and metadata)
+  delete <name>                 move a profile to trash (recoverable)
   exists <name>                 exit 0 if profile exists
   dir                           print the named-profiles directory
 
@@ -28,7 +30,12 @@ Usage:
   copy <src> <dst> [--force]    duplicate a profile (with its description)
   prune [--older-than N] [--dry-run]
                                 delete profiles older than N days (default 30,
-                                skipping pinned profiles)
+                                skipping pinned profiles); also sweeps trash
+
+  trash                         list profiles currently in the trash
+  untrash <name>                restore the most recently trashed <name>
+  empty-trash [--older-than N]  permanently remove trashed items (older than N
+                                days, or all of them if N is omitted)
 
   pin <name>                    mark <name> as pinned (sorted to top)
   unpin <name>                  remove pin from <name>
@@ -36,11 +43,12 @@ Usage:
   pinned <name>                 exit 0 if <name> is pinned
 
   find <pattern>                list profiles whose snapshot matches <pattern>
-  diff <a> <b>                  show differences between two profiles
+  diff <a> <b>                  show structural differences between two profiles
   dry-run <name>                print what `restore <name>` would do
 
-  export <name> [path]          tar up <name> (+ .desc) into [path]
-  import <file>                 extract a tar produced by `export`
+  export <name> [path] [--force]
+                                tar up <name> (+ .desc + pin) into [path]
+  import <file> [--force]       extract a tar produced by `export`
 
   current                       print the current profile (last save/restore)
   restore-current               restore the current profile
@@ -55,7 +63,10 @@ Hooks (configure in tmux.conf):
   PROFILE=<name> is exported into the hook environment.
 
 Status line:
-  #{@resurrect-current}  -> the current profile name (set on save/restore).
+  #{@resurrect-current}        -> current profile name (set on save/restore).
+  status-indicator [marker]    -> prints <marker> (default '*') when the live
+                                  tmux state has drifted from the current
+                                  profile; nothing if in sync. For status-right.
 HELP
 }
 
@@ -75,6 +86,7 @@ resurrect_dir() {
 
 RESURRECT_DIR="${RESURRECT_DIR:-$(resurrect_dir)}"
 NAMED_DIR="$RESURRECT_DIR/named"
+TRASH_DIR="$NAMED_DIR/.trash"
 PINS_FILE="$NAMED_DIR/.pins"
 LOCK_FILE="$NAMED_DIR/.lock"
 SELF="$HOME/.tmux/scripts/resurrect-named.sh"
@@ -87,19 +99,28 @@ RESTORE_SH="$PLUGIN_DIR/restore.sh"
 # never pollute stdout (need_name and friends return values via stdout).
 msg() { tmux display-message "resurrect: $*" 2>/dev/null || printf 'resurrect: %s\n' "$*" >&2; }
 
+# Report a fatal error and stop. Without this, a command failing under `set -e`
+# would kill the script *before* any message — silent death on exactly the
+# operations (save/restore) where feedback matters most.
+die() { msg "$*"; exit 1; }
+
 # Filesystem-safe names: anything outside [A-Za-z0-9._-] is collapsed to '_'.
 sanitize() { printf '%s' "$1" | tr -cs 'A-Za-z0-9._-' '_'; }
 
 # Resolve <raw> -> <sanitized> on stdout. Warns if sanitization changed it;
-# rejects empty or reserved names. Use inside command substitution.
+# rejects empty, reserved, or dot-only names. Use inside command substitution.
 need_name() {
   local raw="$1" role="$2" name
-  [ -n "$raw" ] || { msg "$role needs a name"; exit 1; }
+  [ -n "$raw" ] || die "$role needs a name"
   name="$(sanitize "$raw")"
-  [ -n "$name" ] || { msg "$role: invalid name"; exit 1; }
-  if [ "$name" = "last" ]; then
-    msg "$role: 'last' is reserved by tmux-resurrect"; exit 1
-  fi
+  [ -n "$name" ] || die "$role: invalid name"
+  case "$name" in
+    last)  die "$role: 'last' is reserved by tmux-resurrect" ;;
+    .|..)  die "$role: '$name' is not a valid profile name" ;;
+    # A leading dot would hide the file from every '*.txt' glob (the menu,
+    # list, prune, find) while still existing on disk — a ghost profile.
+    .*)    die "$role: profile names can't start with '.'" ;;
+  esac
   [ "$name" = "$raw" ] || msg "name sanitized to '$name'"
   printf '%s' "$name"
 }
@@ -107,8 +128,7 @@ need_name() {
 need_plugin() {
   if [ ! -x "$SAVE_SH" ] || [ ! -x "$RESTORE_SH" ]; then
     msg "tmux-resurrect plugin not found at $PLUGIN_DIR"
-    msg "install it (TPM: prefix + I) or adjust the path in this script"
-    exit 1
+    die "install it (TPM: prefix + I) or adjust the path in this script"
   fi
 }
 
@@ -119,8 +139,7 @@ need_plugin() {
 # save.sh/restore.sh is from a tmux client (e.g. via run-shell from a binding).
 need_tmux() {
   if [ -z "${TMUX:-}" ]; then
-    msg "this command must be run from inside a tmux session"
-    exit 1
+    die "this command must be run from inside a tmux session"
   fi
 }
 
@@ -174,6 +193,38 @@ unpin_name() {
   fi
 }
 
+# Move a profile (and its description) into the trash, timestamped so repeated
+# deletes of the same name don't collide. Soft-delete: recoverable via untrash.
+trash_profile() { # $1=name
+  local n="$1" ts
+  ts="$(date +%Y%m%d-%H%M%S)"
+  mkdir -p "$TRASH_DIR"
+  if [ -f "$NAMED_DIR/$n.txt" ]; then
+    mv -f "$NAMED_DIR/$n.txt" "$TRASH_DIR/$n.$ts.txt"
+    # Reset the mtime so the trash-age clock starts at deletion time. mv keeps
+    # the original mtime, so a profile pruned *because* it's old would otherwise
+    # be swept by the trash retention sweep the instant it lands in the trash.
+    touch "$TRASH_DIR/$n.$ts.txt" 2>/dev/null || true
+  fi
+  if [ -f "$NAMED_DIR/$n.desc" ]; then
+    mv -f "$NAMED_DIR/$n.desc" "$TRASH_DIR/$n.$ts.desc"
+    touch "$TRASH_DIR/$n.$ts.desc" 2>/dev/null || true
+  fi
+  return 0
+}
+
+# Single place that retires a profile: trash its files, drop its pin, and clear
+# the current pointer if it named this profile. delete and prune both call this
+# so cleanup can never diverge between them (and never leaves a dangling
+# @resurrect-current pointing at a profile that no longer exists).
+remove_profile() { # $1=name
+  local n="$1"
+  trash_profile "$n"
+  unpin_name "$n"
+  [ "$(get_current)" = "$n" ] && set_current "" || true
+  return 0
+}
+
 cmd="${1:-help}"
 shift || true
 
@@ -194,14 +245,27 @@ case "$cmd" in
       msg "profile '$name' exists (use --force to overwrite)"
       exit 0
     fi
-    mkdir -p "$NAMED_DIR"
-    # Serialize concurrent saves so two clients don't race on `last`.
-    exec 9>>"$LOCK_FILE"
-    flock 9
+    mkdir -p "$NAMED_DIR" || die "could not create $NAMED_DIR"
+    # Serialize concurrent saves so two clients don't race on `last`. The
+    # native `prefix + Ctrl-s` and tmux-continuum's auto-save call save.sh
+    # *without* this lock, so keep @continuum-save-interval '0' (see tmux.conf)
+    # to avoid a background writer clobbering `last` between save.sh and cp.
+    locked=0
+    if command -v flock >/dev/null 2>&1; then
+      if exec 9>>"$LOCK_FILE" && flock 9; then locked=1; else msg "warning: could not acquire save lock; continuing"; fi
+    else
+      msg "note: flock not found — saving without a concurrency lock"
+    fi
     run_hook '@resurrect-pre-save' "PROFILE=$name"
-    SCRIPT_OUTPUT="quiet" "$SAVE_SH"
-    cp -L "$RESURRECT_DIR/last" "$target"
-    flock -u 9
+    if ! SCRIPT_OUTPUT="quiet" "$SAVE_SH"; then
+      [ "$locked" = 1 ] && flock -u 9 || true
+      die "resurrect save.sh failed — nothing saved for '$name'"
+    fi
+    if ! cp -L "$RESURRECT_DIR/last" "$target"; then
+      [ "$locked" = 1 ] && flock -u 9 || true
+      die "could not capture snapshot for '$name'"
+    fi
+    [ "$locked" = 1 ] && flock -u 9 || true
     set_current "$name"
     read -r ns nw < <(counts "$target")
     msg "saved '$name' ($(pluralize "$ns" session), $(pluralize "$nw" window))"
@@ -212,10 +276,30 @@ case "$cmd" in
     need_plugin
     need_tmux
     target="$NAMED_DIR/$name.txt"
-    [ -f "$target" ] || { msg "no profile '$name'"; exit 1; }
-    # Absolute symlink: works regardless of restore.sh's cwd.
-    ln -sf "$target" "$RESURRECT_DIR/last"
-    "$RESTORE_SH"
+    [ -f "$target" ] || die "no profile '$name'"
+    last="$RESURRECT_DIR/last"
+    # Preserve the rolling `last` slot. A named restore must not permanently
+    # hijack what `prefix + Ctrl-r` (native restore of `last`) points at, so we
+    # remember the prior target, point `last` at the named profile just for the
+    # duration of restore.sh, then put it back — even if restore fails.
+    prev_kind=none; prev_target=""
+    if   [ -L "$last" ]; then prev_kind=link; prev_target="$(readlink "$last")"
+    elif [ -e "$last" ]; then prev_kind=file; mv -f "$last" "$last.named-bak"
+    fi
+    ln -sfn "$target" "$last"
+    if ! "$RESTORE_SH"; then
+      case "$prev_kind" in
+        link) ln -sfn "$prev_target" "$last" ;;
+        file) mv -f "$last.named-bak" "$last" ;;
+        none) rm -f "$last" ;;
+      esac
+      die "restore failed for '$name'"
+    fi
+    case "$prev_kind" in
+      link) ln -sfn "$prev_target" "$last" ;;
+      file) mv -f "$last.named-bak" "$last" ;;
+      none) rm -f "$last" ;;
+    esac
     set_current "$name"
     run_hook '@resurrect-post-restore' "PROFILE=$name"
     read -r ns nw < <(counts "$target")
@@ -225,8 +309,8 @@ case "$cmd" in
   rename)
     old="$(need_name "${1:-}" rename)"
     new="$(need_name "${2:-}" rename)"
-    [ -f "$NAMED_DIR/$old.txt" ] || { msg "no profile '$old'"; exit 1; }
-    [ -e "$NAMED_DIR/$new.txt" ] && { msg "profile '$new' already exists"; exit 1; }
+    [ -f "$NAMED_DIR/$old.txt" ] || die "no profile '$old'"
+    [ -e "$NAMED_DIR/$new.txt" ] && die "profile '$new' already exists"
     mv "$NAMED_DIR/$old.txt" "$NAMED_DIR/$new.txt"
     [ -f "$NAMED_DIR/$old.desc" ] && mv "$NAMED_DIR/$old.desc" "$NAMED_DIR/$new.desc"
     if is_pinned "$old"; then
@@ -252,10 +336,8 @@ case "$cmd" in
   delete)
     name="$(need_name "${1:-}" delete)"
     if [ -f "$NAMED_DIR/$name.txt" ]; then
-      rm -f "$NAMED_DIR/$name.txt" "$NAMED_DIR/$name.desc"
-      unpin_name "$name"
-      [ "$(get_current)" = "$name" ] && set_current ""
-      msg "deleted profile '$name'"
+      remove_profile "$name"
+      msg "deleted '$name' (recoverable — 'untrash $name' to restore)"
     else
       msg "no profile '$name'"
     fi
@@ -273,7 +355,7 @@ case "$cmd" in
 
   describe)
     name="$(need_name "${1:-}" describe)"
-    [ -f "$NAMED_DIR/$name.txt" ] || { msg "no profile '$name'"; exit 1; }
+    [ -f "$NAMED_DIR/$name.txt" ] || die "no profile '$name'"
     shift || true
     text="${*:-}"
     if [ -z "$text" ]; then
@@ -296,10 +378,9 @@ case "$cmd" in
     dst="$(need_name "${2:-}" copy)"
     force=0
     [ "${3:-}" = "--force" ] && force=1
-    [ -f "$NAMED_DIR/$src.txt" ] || { msg "no profile '$src'"; exit 1; }
+    [ -f "$NAMED_DIR/$src.txt" ] || die "no profile '$src'"
     if [ -e "$NAMED_DIR/$dst.txt" ] && [ "$force" != 1 ]; then
-      msg "profile '$dst' already exists (use --force)"
-      exit 1
+      die "profile '$dst' already exists (use --force)"
     fi
     cp -f "$NAMED_DIR/$src.txt" "$NAMED_DIR/$dst.txt"
     [ -f "$NAMED_DIR/$src.desc" ] && cp -f "$NAMED_DIR/$src.desc" "$NAMED_DIR/$dst.desc"
@@ -317,6 +398,7 @@ case "$cmd" in
       esac
     done
     older="${older%d}"
+    case "$older" in ''|*[!0-9]*) die "prune: --older-than needs a number of days" ;; esac
     [ -d "$NAMED_DIR" ] || { msg "no saved profiles"; exit 0; }
     drop=(); keep=()
     while IFS= read -r -d '' f; do
@@ -332,14 +414,62 @@ case "$cmd" in
       exit 0
     fi
     for n in "${drop[@]}"; do
-      rm -f "$NAMED_DIR/$n.txt" "$NAMED_DIR/$n.desc"
+      remove_profile "$n"
     done
-    msg "pruned ${#drop[@]} profile(s); skipped pinned: ${keep[*]:-none}"
+    # Sweep trashed items past the same window so the trash can't grow forever.
+    [ -d "$TRASH_DIR" ] && find "$TRASH_DIR" -maxdepth 1 -type f -mtime "+$older" -delete 2>/dev/null || true
+    msg "pruned ${#drop[@]} profile(s) to trash; skipped pinned: ${keep[*]:-none}"
+    ;;
+
+  trash)
+    shopt -s nullglob
+    files=("$TRASH_DIR"/*.txt)
+    if [ "${#files[@]}" -eq 0 ]; then
+      msg "trash is empty"
+    else
+      names="$(for f in "${files[@]}"; do basename "$f" .txt; done | paste -sd ',' | sed 's/,/, /g')"
+      msg "trashed: $names"
+    fi
+    ;;
+
+  untrash)
+    name="$(need_name "${1:-}" untrash)"
+    [ -e "$NAMED_DIR/$name.txt" ] && die "profile '$name' already exists (rename or delete it first)"
+    # Most-recently trashed copy of this name.
+    recent="$(ls -t "$TRASH_DIR/$name".*.txt 2>/dev/null | head -n 1 || true)"
+    [ -n "$recent" ] || die "nothing in trash for '$name'"
+    mv "$recent" "$NAMED_DIR/$name.txt"
+    touch "$NAMED_DIR/$name.txt" 2>/dev/null || true   # bubble back up as recent
+    d="${recent%.txt}.desc"
+    [ -f "$d" ] && mv "$d" "$NAMED_DIR/$name.desc" || true
+    msg "restored '$name' from trash"
+    ;;
+
+  empty-trash)
+    older=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --older-than)   older="${2:-}"; shift 2 ;;
+        --older-than=*) older="${1#--older-than=}"; shift ;;
+        *)              shift ;;
+      esac
+    done
+    if [ ! -d "$TRASH_DIR" ]; then
+      msg "trash is empty"
+    elif [ -n "$older" ]; then
+      older="${older%d}"
+      case "$older" in ''|*[!0-9]*) die "empty-trash: --older-than needs a number of days" ;; esac
+      find "$TRASH_DIR" -maxdepth 1 -type f -mtime "+$older" -delete 2>/dev/null || true
+      msg "emptied trashed items older than ${older}d"
+    else
+      rm -rf "$TRASH_DIR"
+      msg "emptied trash"
+    fi
     ;;
 
   pin)
     name="$(need_name "${1:-}" pin)"
-    [ -f "$NAMED_DIR/$name.txt" ] || { msg "no profile '$name'"; exit 1; }
+    [ -f "$NAMED_DIR/$name.txt" ] || die "no profile '$name'"
     if is_pinned "$name"; then
       msg "'$name' already pinned"
     else
@@ -368,7 +498,7 @@ case "$cmd" in
 
   find|grep)
     pat="${1:-}"
-    [ -n "$pat" ] || { msg "$cmd needs a pattern"; exit 1; }
+    [ -n "$pat" ] || die "$cmd needs a pattern"
     [ -d "$NAMED_DIR" ] || exit 0
     shopt -s nullglob
     for f in "$NAMED_DIR"/*.txt; do
@@ -383,36 +513,89 @@ case "$cmd" in
   diff)
     a="$(need_name "${1:-}" diff)"
     b="$(need_name "${2:-}" diff)"
-    [ -f "$NAMED_DIR/$a.txt" ] || { msg "no profile '$a'"; exit 1; }
-    [ -f "$NAMED_DIR/$b.txt" ] || { msg "no profile '$b'"; exit 1; }
+    [ -f "$NAMED_DIR/$a.txt" ] || die "no profile '$a'"
+    [ -f "$NAMED_DIR/$b.txt" ] || die "no profile '$b'"
     a_tmp="$(mktemp)"; b_tmp="$(mktemp)"
-    "$MENU" preview "$a" > "$a_tmp"
-    "$MENU" preview "$b" > "$b_tmp"
+    # `dump` is the color-free, view-independent structural rendering (no
+    # volatile "saved 2h ago" header), so the diff shows real differences
+    # rather than timestamp/view-mode noise.
+    "$MENU" dump "$a" > "$a_tmp"
+    "$MENU" dump "$b" > "$b_tmp"
     diff -u --label "$a" --label "$b" "$a_tmp" "$b_tmp" || true
     rm -f "$a_tmp" "$b_tmp"
     ;;
 
   export)
+    force=0; rest=()
+    for a in "$@"; do
+      case "$a" in --force) force=1 ;; *) rest+=("$a") ;; esac
+    done
+    set -- "${rest[@]:-}"
     name="$(need_name "${1:-}" export)"
-    [ -f "$NAMED_DIR/$name.txt" ] || { msg "no profile '$name'"; exit 1; }
+    [ -f "$NAMED_DIR/$name.txt" ] || die "no profile '$name'"
     out="${2:-$PWD/${name}.resurrect.tar.gz}"
-    files=("$name.txt")
-    [ -f "$NAMED_DIR/$name.desc" ] && files+=("$name.desc")
-    ( cd "$NAMED_DIR" && tar -czf "$out" "${files[@]}" )
-    msg "exported '$name' -> $out"
+    # Resolve to absolute so the `cd` below can't relocate a relative path.
+    case "$out" in /*) ;; *) out="$PWD/$out" ;; esac
+    [ -e "$out" ] && [ "$force" != 1 ] && die "refusing to overwrite '$out' (use --force or choose another path)"
+    # Stage txt + desc + a pin marker so import can round-trip the pin too.
+    stage="$(mktemp -d)"
+    cp "$NAMED_DIR/$name.txt" "$stage/$name.txt"
+    [ -f "$NAMED_DIR/$name.desc" ] && cp "$NAMED_DIR/$name.desc" "$stage/$name.desc"
+    is_pinned "$name" && : > "$stage/$name.pinned" || true
+    if ( cd "$stage" && tar -czf "$out" . ); then
+      rm -rf "$stage"
+      msg "exported '$name' -> $out"
+    else
+      rm -rf "$stage"
+      die "export failed for '$name'"
+    fi
     ;;
   import)
-    file="${1:-}"
-    [ -n "$file" ] && [ -f "$file" ] || { msg "import needs a tarball path"; exit 1; }
+    file=""; force=0
+    for a in "$@"; do
+      case "$a" in --force) force=1 ;; *) [ -z "$file" ] && file="$a" ;; esac
+    done
+    { [ -n "$file" ] && [ -f "$file" ]; } || die "import needs a tarball path"
     mkdir -p "$NAMED_DIR"
-    # Restrict to .txt and .desc so a hostile tarball can't write elsewhere.
-    tar -xzf "$file" -C "$NAMED_DIR" --wildcards '*.txt' '*.desc' 2>/dev/null || true
-    msg "imported $(basename "$file")"
+    # Extract into a staging dir, then move only basename-stripped files into
+    # place. The earlier `--wildcards '*.txt'` approach did NOT prevent path
+    # traversal (a '../x.txt' member matches '*.txt'); basename-on-move does.
+    stage="$(mktemp -d)"
+    if ! tar -xzf "$file" -C "$stage" 2>/dev/null; then
+      rm -rf "$stage"
+      die "import: cannot read '$file' (corrupt or not a tar.gz?)"
+    fi
+    mapfile -d '' txts < <(find "$stage" -type f -name '*.txt' -print0)
+    if [ "${#txts[@]}" -eq 0 ]; then
+      rm -rf "$stage"
+      die "import: no profiles found in '$file'"
+    fi
+    imported=0; skipped=""
+    for p in "${txts[@]}"; do
+      bn="$(basename "$p")"; pn="$(sanitize "${bn%.txt}")"
+      { [ -n "$pn" ] && [ "$pn" != "last" ]; } || continue
+      case "$pn" in .*) continue ;; esac
+      if [ -e "$NAMED_DIR/$pn.txt" ] && [ "$force" != 1 ]; then
+        skipped="$skipped $pn"; continue
+      fi
+      mv -f "$p" "$NAMED_DIR/$pn.txt"
+      [ -f "${p%.txt}.desc" ] && mv -f "${p%.txt}.desc" "$NAMED_DIR/$pn.desc"
+      if [ -f "${p%.txt}.pinned" ] && ! is_pinned "$pn"; then
+        printf '%s\n' "$pn" >> "$PINS_FILE"
+      fi
+      imported=$((imported + 1))
+    done
+    rm -rf "$stage"
+    if [ -n "$skipped" ]; then
+      msg "imported $imported profile(s); skipped existing:$skipped (use --force to overwrite)"
+    else
+      msg "imported $imported profile(s) from $(basename "$file")"
+    fi
     ;;
 
   dry-run|preview)
     name="$(need_name "${1:-}" dry-run)"
-    [ -f "$NAMED_DIR/$name.txt" ] || { msg "no profile '$name'"; exit 1; }
+    [ -f "$NAMED_DIR/$name.txt" ] || die "no profile '$name'"
     "$MENU" preview "$name"
     ;;
 
@@ -420,16 +603,32 @@ case "$cmd" in
     c="$(get_current)"
     if [ -n "$c" ]; then printf '%s\n' "$c"; else exit 1; fi
     ;;
+  status-indicator)
+    # Print <marker> (default '*') when the LIVE tmux state has structurally
+    # drifted (sessions or windows added/removed) from the current profile's
+    # snapshot; print nothing otherwise. Cheap enough for a status-line #()
+    # poll, and must never fail the status bar — always exits 0.
+    marker="${1:-*}"
+    c="$(get_current)"
+    { [ -n "$c" ] && [ -f "$NAMED_DIR/$c.txt" ] && [ -n "${TMUX:-}" ]; } || exit 0
+    live="$(tmux list-sessions -F '#{session_name} #{session_windows}' 2>/dev/null | LC_ALL=C sort || true)"
+    saved="$(awk -F'\t' '
+        ($1=="window" || $1=="pane") && !(($2 SUBSEP $3) in w) { w[$2 SUBSEP $3]=1; n[$2]++ }
+        END { for (s in n) print s, n[s] }
+      ' "$NAMED_DIR/$c.txt" 2>/dev/null | LC_ALL=C sort || true)"
+    [ "$live" = "$saved" ] || printf '%s' "$marker"
+    exit 0
+    ;;
   restore-current)
     need_tmux
     c="$(get_current)"
-    [ -n "$c" ] || { msg "no current profile"; exit 1; }
+    [ -n "$c" ] || die "no current profile"
     exec "$SELF" restore "$c"
     ;;
   save-current)
     need_tmux
     c="$(get_current)"
-    [ -n "$c" ] || { msg "no current profile to save to"; exit 1; }
+    [ -n "$c" ] || die "no current profile to save to"
     if [ "${1:-}" = "--force" ]; then
       exec "$SELF" save --force "$c"
     else
@@ -438,11 +637,11 @@ case "$cmd" in
     ;;
   restore-recent)
     need_tmux
-    [ -d "$NAMED_DIR" ] || { msg "no saved profiles"; exit 1; }
+    [ -d "$NAMED_DIR" ] || die "no saved profiles"
     # `ls *.txt` with no match exits 2; under `set -e` + `pipefail` the
     # command substitution would abort the script silently, so swallow it.
     recent="$(ls -t "$NAMED_DIR"/*.txt 2>/dev/null | head -n 1 || true)"
-    [ -n "$recent" ] || { msg "no saved profiles"; exit 1; }
+    [ -n "$recent" ] || die "no saved profiles"
     exec "$SELF" restore "$(basename "$recent" .txt)"
     ;;
 
