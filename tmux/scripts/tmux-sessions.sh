@@ -6,16 +6,18 @@
 # Companion to resurrect-menu.sh / resurrect-named.sh:
 #   inside tmux   -> opens the saved-profiles popup (identical to prefix + G)
 #   outside tmux  -> an fzf list of live sessions (if any) + saved profiles +
-#                    "[ + new blank session ]". enter attaches / restores / starts.
+#                    "[ + new blank session ]". enter attaches / restores / starts;
+#                    ctrl-x deletes the highlighted saved profile (-> trash).
 #
 # Restoring a profile from a cold start uses a throwaway "_ts_boot" session only
 # to give tmux-resurrect a server to restore into, then kills it before
 # attaching — so nothing redundant survives.
 #
-# Subcommands (internal, used by fzf bindings):
-#   (none)               the launcher itself
-#   pick TYPE ID         act on the chosen row (used by enter via become)
-#   preview-row TYPE ID  render the preview pane
+# Subcommands (internal):
+#   (none)               the launcher itself (picks a row, then acts on it)
+#   rows                 emit the fzf rows (used for the initial list + reload)
+#   preview-row TYPE ID  render the preview pane (used by fzf --preview)
+#   delete-row TYPE ID   confirm + delete a saved profile (used by ctrl-x)
 set -euo pipefail
 
 # A non-interactive shell may not have ~/.local/bin on PATH; make fzf reachable.
@@ -88,7 +90,10 @@ list_rows() {
 
 # Restore a profile and attach, leaving no throwaway session behind.
 boot_restore() {
-  local prof="$1" file="$NAMED_DIR/$prof.txt"
+  # NB: separate `local`s — in one statement (`local prof=$1 file=...$prof`)
+  # the second RHS expands $prof before it's assigned (unbound under set -u).
+  local prof="$1"
+  local file="$NAMED_DIR/$prof.txt"
   [ -f "$file" ] || exec tmux new-session
   local created=0
   if ! have_sessions; then
@@ -114,14 +119,24 @@ boot_restore() {
 }
 
 case "${1:-menu}" in
-  pick)
-    type="${2:-}"; id="${3:-}"
-    case "$type" in
-      sess) exec tmux attach -t "$id" ;;
-      new)  exec tmux new-session ;;
-      prof) boot_restore "$id" ;;
-      hdr)  exit 0 ;;                 # section header / spacer — not selectable
-      *)    exit 0 ;;
+  rows)
+    # Emit the picker rows. Width comes from fzf's live size on reload
+    # (FZF_COLUMNS), or the terminal at first launch.
+    cols="${FZF_COLUMNS:-$(tput cols 2>/dev/null || echo 80)}"
+    list_rows
+    ;;
+
+  delete-row)
+    # ctrl-x: delete a saved profile (soft-delete to trash, with confirm +
+    # preview, reusing the popup's dialog). Only acts on saved-profile rows.
+    case "${2:-}" in
+      prof) "$MENU_BIN" delete-interactive "${3:-}" ;;
+      sess)
+        clear 2>/dev/null || printf '\033c'
+        printf '\n  %sctrl-x deletes saved profiles — "%s" is a live session.%s\n\n  %spress any key…%s' \
+          "$dim" "${3:-}" "$rst" "$dim" "$rst"
+        read -rsn1 ;;
+      *) : ;;
     esac
     ;;
 
@@ -151,10 +166,14 @@ case "${1:-menu}" in
     if ! have_sessions && { [ -z "$NAMED_DIR" ] || ! ls "$NAMED_DIR"/*.txt >/dev/null 2>&1; }; then
       exec tmux new-session
     fi
-    cols="$(tput cols 2>/dev/null || echo 80)"
-    # Sections are now labelled in the list itself, so keep the top hint to one line.
-    header="$(printf '%senter%s open · %sesc%s shell · type to filter' "$cyan" "$rst" "$cyan" "$rst")"
-    list_rows | fzf \
+    # Sections are labelled in the list itself, so keep the top hint to one line.
+    header="$(printf '%senter%s open · %s^x%s delete · %sesc%s shell · type to filter' "$cyan" "$rst" "$cyan" "$rst" "$cyan" "$rst")"
+    # Capture the choice, then act in THIS process — it owns the real terminal.
+    # (`become`+`exec tmux` inherits fzf's piped stdin and dies with
+    #  "open terminal failed: can't use /dev/tty" when attaching a client.)
+    # enter only `accept`s on a real row; on a header/spacer it's a no-op.
+    # ctrl-x deletes the highlighted saved profile and reloads (stays in the picker).
+    sel="$("$SELF" rows | fzf \
       --delimiter='\t' \
       --with-nth=3 \
       --ansi \
@@ -164,6 +183,17 @@ case "${1:-menu}" in
       --preview="$SELF preview-row {1} {2}" \
       --preview-window='down,55%,wrap' \
       --bind="start:down" \
-      --bind="enter:become($SELF pick {1} {2})"
+      --bind="ctrl-x:execute($SELF delete-row {1} {2})+reload($SELF rows)" \
+      --bind="enter:transform([ {1} = hdr ] || echo accept)")" || exit 0
+    [ -n "$sel" ] || exit 0
+    ttype="$(printf '%s\n' "$sel" | cut -f1)"
+    tid="$(printf '%s\n' "$sel" | cut -f2)"
+    case "$ttype" in
+      sess) exec tmux attach -t "$tid" ;;
+      prof) boot_restore "$tid" ;;
+      new)  exec tmux new-session ;;
+      hdr)  exec "$SELF" ;;            # safety: a header slipped through → reopen
+      *)    exit 0 ;;
+    esac
     ;;
 esac
