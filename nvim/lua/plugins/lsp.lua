@@ -143,6 +143,7 @@ return {
     local ensure_installed = vim.tbl_keys(servers)
     vim.list_extend(ensure_installed, {
       'checkmake',
+      'jdtls',
       'eslint_d',
       'prettier',
       'ruff',

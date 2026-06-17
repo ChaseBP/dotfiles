@@ -44,6 +44,7 @@ require('lazy').setup({
   require 'plugins.treesitter',
   require 'plugins.telescope',
   require 'plugins.lsp',
+  require 'plugins.jdtls',
   require 'plugins.autocompletion',
   require 'plugins.autoformatting',
   require 'plugins.gitsigns',
