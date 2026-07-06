@@ -57,6 +57,11 @@ Usage:
 
   help                          this message
 
+Note:
+  save first renames tmux's auto-named numeric sessions ("0", "1", …) to the
+  profile name, so different profiles never collide on default session names
+  at restore time (restore merges into any live session with the same name).
+
 Hooks (configure in tmux.conf):
   set -g @resurrect-pre-save     '<shell command>'   # runs before save
   set -g @resurrect-post-restore '<shell command>'   # runs after restore
@@ -246,6 +251,23 @@ case "$cmd" in
       exit 0
     fi
     mkdir -p "$NAMED_DIR" || die "could not create $NAMED_DIR"
+    # tmux's auto-generated numeric session names ("0", "1", …) collide across
+    # profiles: restore.sh merges a snapshot into any live session with the
+    # same name, so two profiles that each captured a session "0" clobber each
+    # other on restore. Rename auto-named sessions to a profile-derived name
+    # before snapshotting — the LIVE session, not just the file, because the
+    # status-indicator drift check compares live names against saved ones.
+    base="${name//[.:]/_}"        # '.' and ':' are invalid in session names
+    renamed=""
+    while IFS= read -r s; do
+      case "$s" in ''|*[!0-9]*) continue ;; esac   # only all-digit (auto) names
+      [ "$s" = "$base" ] && continue
+      new="$base"
+      if tmux has-session -t "=$new" 2>/dev/null; then new="$base-$s"; fi
+      if tmux rename-session -t "=$s" "$new" 2>/dev/null; then
+        renamed="$renamed $s→$new"
+      fi
+    done < <(tmux list-sessions -F '#{session_name}' 2>/dev/null || true)
     # Serialize concurrent saves so two clients don't race on `last`. The
     # native `prefix + Ctrl-s` and tmux-continuum's auto-save call save.sh
     # *without* this lock, so keep @continuum-save-interval '0' (see tmux.conf)
@@ -268,7 +290,7 @@ case "$cmd" in
     [ "$locked" = 1 ] && flock -u 9 || true
     set_current "$name"
     read -r ns nw < <(counts "$target")
-    msg "saved '$name' ($(pluralize "$ns" session), $(pluralize "$nw" window))"
+    msg "saved '$name' ($(pluralize "$ns" session), $(pluralize "$nw" window))${renamed:+; renamed$renamed}"
     ;;
 
   restore)

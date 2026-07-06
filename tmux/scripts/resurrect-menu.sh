@@ -12,6 +12,7 @@
 #   enter          restore (asks to confirm first)
 #   ctrl-s         save current state under a new name
 #   ctrl-w         write-back the current (▶) profile from the live state
+#   ctrl-o         overwrite the highlighted profile from the live state
 #   ctrl-r         rename selected profile
 #   ctrl-x         delete selected → trash (or all selected if multi)
 #   ctrl-e         set/clear description (applies to all selected)
@@ -20,6 +21,7 @@
 #   ctrl-g         search inside snapshots (filters the list)
 #   alt-d          diff two tab-selected profiles
 #   ctrl-t         cycle sort (mtime <-> name)
+#   ctrl-l         reopen the popup (re-fit after a terminal resize)
 #   alt-v          cycle preview view (active/collapsed/full)
 #   ctrl-/         cycle preview pane (right/down/hidden)
 #   ?              full keyboard help
@@ -40,6 +42,8 @@
 #   diff-interactive A B   show a diff of two profiles (used by alt-d)
 #   find-interactive       prompt + set/clear the content filter (used by ctrl-g)
 #   write-back-interactive confirm + re-save the current profile (used by ctrl-w)
+#   overwrite-interactive N confirm + overwrite N from the live state (ctrl-o)
+#   reopen [query]         close + reopen the popup at the current client size
 #   pin-toggle N…          toggle pin on N (used by ctrl-p; supports multi)
 #   cycle-sort             advance the persistent sort mode (used by ctrl-t)
 #   cycle-view             advance the persistent preview mode (used by alt-v)
@@ -58,6 +62,9 @@ SORT_FILE="${TMPDIR:-/tmp}/resurrect-menu-sort.${USER:-$(id -u)}"
 VIEW_FILE="${TMPDIR:-/tmp}/resurrect-menu-view.${USER:-$(id -u)}"
 # Transient content filter (set by ctrl-g). Cleared each time the popup opens.
 FILTER_FILE="${TMPDIR:-/tmp}/resurrect-menu-filter.${USER:-$(id -u)}"
+# One-shot fzf query handoff for ctrl-l (reopen): its presence also marks the
+# next popup open as a reopen bounce, so the ctrl-g filter survives it.
+QUERY_FILE="${TMPDIR:-/tmp}/resurrect-menu-query.${USER:-$(id -u)}"
 
 sort_mode() { cat "$SORT_FILE" 2>/dev/null || echo mtime; }
 set_sort()  { printf '%s' "$1" > "$SORT_FILE"; }
@@ -631,6 +638,52 @@ case "${1:-menu}" in
     "$NAMED_BIN" save-current --force
     ;;
 
+  overwrite-interactive)
+    # Bound to ctrl-o. Overwrite the HIGHLIGHTED profile with the live tmux
+    # state — a targeted write-back for any profile, not just the current ▶
+    # one. Lets a session started plain (`tmux`) be saved over an existing
+    # profile without restoring it first. Confirms with saved→live counts and
+    # shows what the profile currently holds, since this replaces it.
+    name="${2:-}"
+    [ -n "$name" ] || exit 0
+    dlg "overwrite from live"
+    if [ ! -f "$NAMED_DIR/$name.txt" ]; then
+      dlg_hint "no profile '$name'"
+      printf '\n  %spress any key…%s' "$DD" "$DR"
+      read -rsn1
+      exit 0
+    fi
+    dlg_hint "replace this profile's snapshot with the current live state"
+    printf '\n'
+    COLOR=1 parse_profile "$NAMED_DIR/$name.txt" collapsed | sed 's/^/  /'
+    read -r sns snw < <(parse_profile "$NAMED_DIR/$name.txt" counts)
+    lns="$(tmux list-sessions -F x 2>/dev/null | wc -l | tr -d ' ')"
+    lnw="$(tmux list-windows -a -F x 2>/dev/null | wc -l | tr -d ' ')"
+    printf '\n  %s%s%s   saved %ss·%sw  →  live %ss·%sw\n' "$DC" "$name" "$DR" "$sns" "$snw" "$lns" "$lnw"
+    printf '\n  %soverwrite "%s" with the live state?%s [y/N] ' "$DY" "$name" "$DR"
+    read -r a
+    [ "$a" = y ] || [ "$a" = Y ] || exit 0
+    # --force: skip the backend's tmux confirm-before (nested popups don't
+    # render in here) — this dialog already asked.
+    "$NAMED_BIN" save --force "$name"
+    ;;
+
+  reopen)
+    # Bound to ctrl-l (execute-silent + abort). tmux resolves the popup's
+    # percentage size into absolute cells once, at open time, and on client
+    # resize only ever SHRINKS a popup to fit (3.6's popup_resize_cb clamps,
+    # never grows) — so a popup opened in a small terminal stays small after
+    # maximizing. Close + reopen is the only way to re-apply the 70% geometry.
+    # The typed filter query rides along via QUERY_FILE.
+    printf '%s' "${2:-}" > "$QUERY_FILE"
+    client="$(tmux display-message -p '#{client_name}' 2>/dev/null || true)"
+    [ -n "$client" ] || { rm -f "$QUERY_FILE"; exit 0; }
+    # -b: return immediately so fzf's abort can close THIS popup first; the
+    # sleep lets it tear down (a popup can't open while one is still up).
+    # Geometry mirrors the prefix+G binding in tmux.conf.
+    tmux run-shell -b "sleep 0.15; tmux display-popup -c '$client' -E -w 70% -h 70% -T ' saved tmux sessions ' '$SELF'"
+    ;;
+
   pin-toggle)
     shift
     [ $# -gt 0 ] || exit 0
@@ -681,6 +734,7 @@ case "${1:-menu}" in
       printf '\n  %sACTIONS%s\n' "$DB" "$DR"
       row ctrl-s "$DC" "save current state as a new profile"
       row ctrl-w "$DC" "write-back current ▶ profile (overwrite from live)"
+      row ctrl-o "$DC" "overwrite highlighted profile from live state"
       row ctrl-r "$DC" "rename"
       row ctrl-x "$DC" "delete → trash (multi-select ok)"
       row ctrl-e "$DC" "set / clear description (multi ok)"
@@ -689,6 +743,7 @@ case "${1:-menu}" in
       row ctrl-g "$DC" "search inside snapshots (filter)"
       row alt-d  "$DC" "diff two selected profiles"
       row ctrl-t "$DC" "cycle sort (recent ⇄ name)"
+      row ctrl-l "$DC" "reopen popup (re-fit after terminal resize)"
       row alt-v  "$DC" "cycle preview (active/collapsed/full)"
       row ctrl-/ "$DC" "cycle preview pane (right/down/hidden)"
       printf '\n  %sMARKERS%s\n' "$DB" "$DR"
@@ -723,8 +778,16 @@ case "${1:-menu}" in
       exit 0
     fi
     # The content filter is transient — don't let a stale one from a previous
-    # popup hide profiles on the next open.
-    rm -f "$FILTER_FILE"
+    # popup hide profiles on the next open. Exception: a ctrl-l reopen bounce
+    # (QUERY_FILE present) is the same "session" continuing, so it keeps both
+    # the ctrl-g filter and the typed query.
+    query=""
+    if [ -f "$QUERY_FILE" ]; then
+      query="$(cat "$QUERY_FILE" 2>/dev/null || true)"
+      rm -f "$QUERY_FILE"
+    else
+      rm -f "$FILTER_FILE"
+    fi
     if [ -z "$("$SELF" rows)" ]; then
       printf '\n  No saved profiles yet.\n\n'
       printf '  Save the current tmux state with  prefix + S  (named save),\n'
@@ -747,11 +810,13 @@ case "${1:-menu}" in
       --multi \
       --marker='+' \
       --header="$header" \
+      --query="$query" \
       --preview="COLOR=1 $SELF preview {1}" \
       --preview-window='down,55%,wrap' \
       --bind="enter:become($SELF restore-interactive {1})" \
       --bind="ctrl-s:execute($SELF save-interactive)+reload(COLS=$cols COLOR=1 $SELF rows)+transform-header($SELF header)" \
       --bind="ctrl-w:execute($SELF write-back-interactive)+reload(COLS=$cols COLOR=1 $SELF rows)+refresh-preview" \
+      --bind="ctrl-o:execute($SELF overwrite-interactive {1})+reload(COLS=$cols COLOR=1 $SELF rows)+refresh-preview" \
       --bind="ctrl-r:execute($SELF rename-interactive {1})+reload(COLS=$cols COLOR=1 $SELF rows)" \
       --bind="ctrl-x:execute($SELF delete-interactive {+1})+reload(COLS=$cols COLOR=1 $SELF rows)+transform-header($SELF header)" \
       --bind="ctrl-e:execute($SELF describe-interactive {+1})+reload(COLS=$cols COLOR=1 $SELF rows)" \
@@ -760,6 +825,7 @@ case "${1:-menu}" in
       --bind="ctrl-g:execute($SELF find-interactive)+reload(COLS=$cols COLOR=1 $SELF rows)+transform-header($SELF header)" \
       --bind="ctrl-p:execute-silent($SELF pin-toggle {+1})+reload(COLS=$cols COLOR=1 $SELF rows)" \
       --bind="ctrl-t:execute-silent($SELF cycle-sort)+reload(COLS=$cols COLOR=1 $SELF rows)+transform-header($SELF header)" \
+      --bind="ctrl-l:execute-silent($SELF reopen {q})+abort" \
       --bind="alt-v:execute-silent($SELF cycle-view)+refresh-preview" \
       --bind="ctrl-/:change-preview-window(right,60%|down,40%|hidden|down,55%)" \
       --bind="shift-up:preview-up" \
