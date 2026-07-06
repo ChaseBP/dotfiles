@@ -1,60 +1,75 @@
 #!/usr/bin/env bash
-set -e
+# Common dev dependencies: python3 (+pip/venv) via the system package manager,
+# Node LTS via nvm (user-local, never needs sudo).
+set -euo pipefail
+. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
-echo "📦 Installing common development dependencies (Node, Python venv)..."
+# Pinned — installing nvm from `master` means an unreviewed script each run.
+NVM_VERSION="${NVM_VERSION:-v0.40.3}"
 
-# ------------------------------
-# 1. Base packages
-# ------------------------------
-echo "🔧 Installing base packages..."
-sudo apt update
-sudo apt install -y \
-    curl \
-    python3 \
-    python3-venv \
-    python3-pip
+info "📦 Installing common development dependencies (Node, Python)..."
 
 # ------------------------------
-# 2. Install NVM (Node Version Manager)
+# 1. Base packages — only touch the package manager when something is missing
+# ------------------------------
+need=()
+command -v curl >/dev/null 2>&1 || need+=(curl)
+command -v git  >/dev/null 2>&1 || need+=(git)
+if command -v python3 >/dev/null 2>&1; then
+  python3 -m pip --version >/dev/null 2>&1 || need+=(python3-pip)
+  python3 -c 'import venv' 2>/dev/null || need+=(python3-venv)
+else
+  need+=(python3 python3-pip python3-venv)
+fi
+if [ "${#need[@]}" -gt 0 ]; then
+  info "🔧 Installing: ${need[*]}"
+  pkg_install "${need[@]}" || warn "some base packages missing — continuing"
+else
+  ok "base packages present"
+fi
+
+# ------------------------------
+# 2. Install NVM (pinned version)
 # ------------------------------
 export NVM_DIR="$HOME/.nvm"
-
-if [ ! -d "$NVM_DIR" ]; then
-    echo "⬇ Installing NVM..."
-    curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/master/install.sh | bash
+if [ -d "$NVM_DIR" ]; then
+  ok "NVM already installed"
+elif dry; then
+  info "   [dry-run] would install nvm $NVM_VERSION"
 else
-    echo "✔ NVM already installed"
+  info "⬇  Installing NVM $NVM_VERSION..."
+  curl -fsSL "https://raw.githubusercontent.com/nvm-sh/nvm/$NVM_VERSION/install.sh" | bash
 fi
 
 # ------------------------------
-# 3. Load NVM into current shell
+# 3. Load NVM + install Node.js LTS
 # ------------------------------
+# nvm.sh trips over `set -u` (unbound vars internally), so relax around it.
+set +u
 # shellcheck source=/dev/null
 [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+set -u
 
-# ------------------------------
-# 4. Install Node.js LTS
-# ------------------------------
 if command -v nvm >/dev/null 2>&1; then
-    if ! nvm ls --no-colors | grep -q "lts"; then
-        echo "⬇ Installing Node.js LTS..."
-        nvm install --lts
-    else
-        echo "✔ Node.js LTS already installed"
-    fi
-
-    nvm use --lts
-else
-    echo "❌ NVM not found after install"
-    exit 1
+  if nvm ls --no-colors 2>/dev/null | grep -q "lts"; then
+    ok "Node.js LTS already installed"
+  elif dry; then
+    info "   [dry-run] would install Node.js LTS"
+  else
+    info "⬇  Installing Node.js LTS..."
+    set +u; nvm install --lts; set -u
+  fi
+  if ! dry; then set +u; nvm use --lts >/dev/null; set -u; fi
+elif ! dry; then
+  die "nvm not found after install"
 fi
 
 # ------------------------------
-# 5. Verify installs
+# 4. Verify (best effort — some may be dry-run / no-sudo skips)
 # ------------------------------
-echo "🧪 Verifying versions..."
-node --version
-npm --version
-python3 --version
+info "🧪 Versions:"
+for c in node npm python3; do
+  printf '   %-8s %s\n' "$c" "$("$c" --version 2>/dev/null | head -1 || echo 'not installed')"
+done
 
-echo "✅ Dependency setup complete"
+ok "dependency setup complete"

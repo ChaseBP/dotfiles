@@ -80,17 +80,33 @@ dotfiles/
 
 ---
 
-## 🚀 Installation (WSL Ubuntu)
-
-> ⚠️ Run this only on a **fresh or trusted WSL Ubuntu install**.
-> The scripts use `apt` and `sudo`.
+## 🚀 Installation (Linux: apt / dnf / pacman)
 
 ```bash
 git clone git@github.com:<your-username>/dotfiles.git
 cd dotfiles
-chmod +x install.sh scripts/*.sh
 ./install.sh
 ```
+
+Useful flags:
+
+```bash
+./install.sh --dry-run          # show what would change, touch nothing
+./install.sh --only zsh,tmux    # run a subset of steps
+./install.sh --skip nvim        # run everything except a step
+./install.sh --no-sudo          # no sudo: skip system packages, install to ~/.local
+./install.sh --list             # list the steps (zsh deps nvim tmux)
+```
+
+The installer detects apt/dnf/pacman, backs up any real config file it
+replaces (`*.pre-dotfiles`), and a failed step doesn't abort the rest —
+the summary tells you what to retry. Existing configs are symlinked, so
+re-running is always safe. macOS isn't supported (the scripts assume
+bash ≥ 4 and GNU tools).
+
+Machine-specific shell config (JAVA_HOME, extra PATHs, ssh-agent, …)
+belongs in `~/.zshrc.local` — sourced by the tracked `.zshrc`, never
+touched by the installer.
 
 After installation, **restart your terminal**
 or run:
