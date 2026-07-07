@@ -8,3 +8,6 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Local-only notes / AI harness artifacts
+claude-system-prompt.md

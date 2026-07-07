@@ -82,6 +82,14 @@ dotfiles/
 
 ## 🚀 Installation (Linux: apt / dnf / pacman)
 
+One-liner on a fresh machine (clones to `~/dotfiles`, then installs):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ChaseBP/dotfiles/main/bootstrap.sh | bash
+```
+
+Or manually:
+
 ```bash
 git clone git@github.com:<your-username>/dotfiles.git
 cd dotfiles
