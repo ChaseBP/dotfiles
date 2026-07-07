@@ -10,7 +10,7 @@
 #   type           filter the list
 #   tab            toggle multi-select
 #   enter          restore (asks to confirm first)
-#   ctrl-s         save current state under a new name
+#   ctrl-s         save the current session (or all sessions) as a new profile
 #   ctrl-w         write-back the current (▶) profile from the live state
 #   ctrl-o         overwrite the highlighted profile from the live state
 #   ctrl-r         rename selected profile
@@ -460,17 +460,31 @@ case "${1:-menu}" in
 
   save-interactive)
     dlg "save profile"
-    dlg_hint "snapshots the current tmux state · empty cancels"
+    cur_sess="$(tmux display-message -p '#{client_session}' 2>/dev/null || true)"
+    if [ -n "$cur_sess" ]; then
+      dlg_hint "snapshots the current session ($cur_sess) · empty cancels"
+    else
+      dlg_hint "snapshots all sessions (no attached client) · empty cancels"
+    fi
     printf '\n  %sname:%s ' "$DC" "$DR"
     read -r n
     [ -n "$n" ] || exit 0
+    # Per-session by default; offer the whole server as the explicit choice.
+    flag=""
+    if [ -n "$cur_sess" ]; then
+      printf '  %sscope — [c]urrent session "%s" or [a]ll sessions?%s [C/a] ' "$DC" "$cur_sess" "$DR"
+      read -r sc
+      case "$sc" in a|A) flag="--all" ;; esac
+    fi
     if "$NAMED_BIN" exists "$n"; then
       printf '  %s"%s" exists — overwrite?%s [y/N] ' "$DY" "$n" "$DR"
       read -r a
       [ "$a" = y ] || [ "$a" = Y ] || exit 0
-      "$NAMED_BIN" save --force "$n"
+      # shellcheck disable=SC2086  # $flag intentionally empty or one word
+      "$NAMED_BIN" save --force $flag "$n"
     else
-      "$NAMED_BIN" save "$n"
+      # shellcheck disable=SC2086
+      "$NAMED_BIN" save $flag "$n"
     fi
     ;;
 
@@ -628,9 +642,18 @@ case "${1:-menu}" in
       exit 0
     fi
     read -r sns snw < <(parse_profile "$NAMED_DIR/$cur.txt" counts)
-    lns="$(tmux list-sessions -F x 2>/dev/null | wc -l | tr -d ' ')"
-    lnw="$(tmux list-windows -a -F x 2>/dev/null | wc -l | tr -d ' ')"
-    dlg_hint "overwrite the current profile's saved snapshot with the live state"
+    # Live counts scoped to the profile's own sessions — write-back keeps the
+    # profile's scope (save-current --profile-scope), so whole-server counts
+    # would misrepresent what's about to be written.
+    lns=0; lnw=0
+    while IFS= read -r s; do
+      [ -n "$s" ] || continue
+      if tmux has-session -t "=$s" 2>/dev/null; then
+        lns=$((lns + 1))
+        lnw=$((lnw + $(tmux list-windows -t "=$s" -F x 2>/dev/null | wc -l | tr -d ' ')))
+      fi
+    done < <(profile_sessions "$NAMED_DIR/$cur.txt")
+    dlg_hint "overwrite this profile's snapshot from its live sessions"
     printf '\n  %s▶ %s%s   saved %ss·%sw  →  live %ss·%sw\n' "$DC" "$cur" "$DR" "$sns" "$snw" "$lns" "$lnw"
     printf '\n  %swrite back to "%s"?%s [y/N] ' "$DY" "$cur" "$DR"
     read -r a
@@ -657,15 +680,30 @@ case "${1:-menu}" in
     printf '\n'
     COLOR=1 parse_profile "$NAMED_DIR/$name.txt" collapsed | sed 's/^/  /'
     read -r sns snw < <(parse_profile "$NAMED_DIR/$name.txt" counts)
-    lns="$(tmux list-sessions -F x 2>/dev/null | wc -l | tr -d ' ')"
-    lnw="$(tmux list-windows -a -F x 2>/dev/null | wc -l | tr -d ' ')"
+    # Per-session by default, matching save; the counts preview reflects the
+    # chosen scope so the shrink/grow is visible before confirming.
+    cur_sess="$(tmux display-message -p '#{client_session}' 2>/dev/null || true)"
+    flag=""
+    if [ -n "$cur_sess" ]; then
+      printf '\n  %sscope — [c]urrent session "%s" or [a]ll sessions?%s [C/a] ' "$DC" "$cur_sess" "$DR"
+      read -r sc
+      case "$sc" in a|A) flag="--all" ;; esac
+    fi
+    if [ "$flag" = "--all" ] || [ -z "$cur_sess" ]; then
+      lns="$(tmux list-sessions -F x 2>/dev/null | wc -l | tr -d ' ')"
+      lnw="$(tmux list-windows -a -F x 2>/dev/null | wc -l | tr -d ' ')"
+    else
+      lns=1
+      lnw="$(tmux list-windows -t "=$cur_sess" -F x 2>/dev/null | wc -l | tr -d ' ')"
+    fi
     printf '\n  %s%s%s   saved %ss·%sw  →  live %ss·%sw\n' "$DC" "$name" "$DR" "$sns" "$snw" "$lns" "$lnw"
     printf '\n  %soverwrite "%s" with the live state?%s [y/N] ' "$DY" "$name" "$DR"
     read -r a
     [ "$a" = y ] || [ "$a" = Y ] || exit 0
     # --force: skip the backend's tmux confirm-before (nested popups don't
     # render in here) — this dialog already asked.
-    "$NAMED_BIN" save --force "$name"
+    # shellcheck disable=SC2086  # $flag intentionally empty or one word
+    "$NAMED_BIN" save --force $flag "$name"
     ;;
 
   reopen)
@@ -732,7 +770,7 @@ case "${1:-menu}" in
       row '?'       "$DC" "show this help"
       row esc       "$DC" "close the popup"
       printf '\n  %sACTIONS%s\n' "$DB" "$DR"
-      row ctrl-s "$DC" "save current state as a new profile"
+      row ctrl-s "$DC" "save current session (or all) as a new profile"
       row ctrl-w "$DC" "write-back current ▶ profile (overwrite from live)"
       row ctrl-o "$DC" "overwrite highlighted profile from live state"
       row ctrl-r "$DC" "rename"

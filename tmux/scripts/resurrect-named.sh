@@ -16,8 +16,12 @@ print_help() {
 Named tmux-resurrect profiles.
 
 Usage:
-  save [--force] <name>         snapshot current state as <name>
-  restore <name>                restore the <name> snapshot
+  save [--force] [--all] [--session <s>] <name>
+                                snapshot the CURRENT SESSION as <name>
+                                (--all: every session on the server;
+                                 --session <s>: a specific session)
+  restore <name>                restore the <name> snapshot (merges into
+                                the running server)
   rename <old> <new>            rename a saved profile (and metadata)
   list                          list saved profile names
   delete <name>                 move a profile to trash (recoverable)
@@ -52,20 +56,29 @@ Usage:
 
   current                       print the current profile (last save/restore)
   restore-current               restore the current profile
-  save-current [--force]        re-save under the current profile name
+  save-current [--force]        re-save the current profile from live state,
+                                keeping the profile's own session scope
   restore-recent                restore the most recently saved profile
+  auto-write-back               for the client-detached hook: silently re-save
+                                the current profile if the live state drifted
 
   help                          this message
 
-Note:
-  save first renames tmux's auto-named numeric sessions ("0", "1", …) to the
-  profile name, so different profiles never collide on default session names
-  at restore time (restore merges into any live session with the same name).
+Notes:
+  - Profiles are PER-SESSION by default: save captures only the session you
+    are in, so each profile maps to one project. Use --all for a snapshot of
+    the whole server. Overwriting an existing profile keeps its session scope.
+  - save renames tmux's auto-named numeric sessions ("0", "1", …) to the
+    profile name, so different profiles never collide on default session
+    names at restore time (restore merges into same-named live sessions).
+  - Overwriting a profile stashes the previous snapshot in the trash first
+    (recover: delete the profile, then `untrash <name>`).
 
 Hooks (configure in tmux.conf):
   set -g @resurrect-pre-save     '<shell command>'   # runs before save
   set -g @resurrect-post-restore '<shell command>'   # runs after restore
   PROFILE=<name> is exported into the hook environment.
+  set -g @resurrect-autosave-on-detach '0'           # disable auto-write-back
 
 Status line:
   #{@resurrect-current}        -> current profile name (set on save/restore).
@@ -181,6 +194,24 @@ run_hook() { # $1=option name (e.g. @resurrect-pre-save) ; remaining=env KEY=VAL
 
 is_pinned() { [ -f "$PINS_FILE" ] && grep -qxF "$1" "$PINS_FILE"; }
 
+# Rename an auto-named (all-digit) session to a profile-derived name; other
+# names pass through. Prints the session's (possibly new) name. tmux's
+# numeric defaults collide across profiles — restore merges a snapshot into
+# any live session with the same name, so "0" saved twice under different
+# profiles would clobber on restore.
+rename_for_profile() { # $1=session $2=profile-derived base name
+  local s="$1" base="$2" new
+  case "$s" in ''|*[!0-9]*) printf '%s' "$s"; return 0 ;; esac
+  [ "$s" = "$base" ] && { printf '%s' "$s"; return 0; }
+  new="$base"
+  if tmux has-session -t "=$new" 2>/dev/null; then new="$base-$s"; fi
+  if tmux rename-session -t "=$s" "$new" 2>/dev/null; then
+    printf '%s' "$new"
+  else
+    printf '%s' "$s"
+  fi
+}
+
 # Remove a pin entry safely (no-op if not present). Removes the file entirely
 # when the last pin is dropped, so an empty .pins file never lingers.
 unpin_name() {
@@ -235,39 +266,74 @@ shift || true
 
 case "$cmd" in
   save)
-    force=0
-    if [ "${1:-}" = "--force" ]; then force=1; shift; fi
+    force=0; all=0; pscope=0; scope_arg=""
+    while :; do
+      case "${1:-}" in
+        --force)         force=1; shift ;;
+        --all)           all=1; shift ;;
+        --profile-scope) pscope=1; shift ;;   # keep the existing profile's sessions
+        --session)       scope_arg="${2:-}"; shift 2 ;;
+        --session=*)     scope_arg="${1#*=}"; shift ;;
+        *) break ;;
+      esac
+    done
     name="$(need_name "${1:-}" save)"
     need_plugin
     need_tmux
     target="$NAMED_DIR/$name.txt"
     if [ -e "$target" ] && [ "$force" != 1 ]; then
       if [ -n "${TMUX:-}" ]; then
+        flags="--force"
+        [ "$all" = 1 ] && flags="$flags --all"
+        [ "$pscope" = 1 ] && flags="$flags --profile-scope"
+        [ -n "$scope_arg" ] && flags="$flags --session=$scope_arg"
         tmux confirm-before -p "profile '$name' exists — overwrite? (y/n)" \
-          "run-shell '$SELF save --force $name'"
+          "run-shell '$SELF save $flags $name'"
         exit 0
       fi
       msg "profile '$name' exists (use --force to overwrite)"
       exit 0
     fi
     mkdir -p "$NAMED_DIR" || die "could not create $NAMED_DIR"
-    # tmux's auto-generated numeric session names ("0", "1", …) collide across
-    # profiles: restore.sh merges a snapshot into any live session with the
-    # same name, so two profiles that each captured a session "0" clobber each
-    # other on restore. Rename auto-named sessions to a profile-derived name
-    # before snapshotting — the LIVE session, not just the file, because the
+    # Scope: a profile captures ONE session by default (per-project snapshots;
+    # a whole-server save silently drags every open project into the profile).
+    # Resolution order:
+    #   --all            whole server
+    #   --session <s>    that session
+    #   --profile-scope  the sessions the existing snapshot already holds
+    #                    (write-back path: never let the client's current
+    #                    session leak into a different project's profile)
+    #   client session   whatever session the invoking client is on
+    #   fallback         whole server (no client, e.g. launcher save)
+    scope_sess=""; scope_from_target=0
+    if [ "$all" != 1 ]; then
+      if [ -n "$scope_arg" ]; then
+        tmux has-session -t "=$scope_arg" 2>/dev/null || die "save: no session '$scope_arg'"
+        scope_sess="$scope_arg"
+      elif [ "$pscope" = 1 ] && [ -f "$target" ]; then
+        scope_from_target=1
+      else
+        scope_sess="$(tmux display-message -p '#{client_session}' 2>/dev/null || true)"
+        if [ -z "$scope_sess" ]; then
+          if [ "$pscope" != 1 ] && [ -f "$target" ]; then scope_from_target=1; else all=1; fi
+        fi
+      fi
+    fi
+    # Rename auto-named numeric sessions to a profile-derived name before
+    # snapshotting — the LIVE session, not just the file, because the
     # status-indicator drift check compares live names against saved ones.
     base="${name//[.:]/_}"        # '.' and ':' are invalid in session names
     renamed=""
-    while IFS= read -r s; do
-      case "$s" in ''|*[!0-9]*) continue ;; esac   # only all-digit (auto) names
-      [ "$s" = "$base" ] && continue
-      new="$base"
-      if tmux has-session -t "=$new" 2>/dev/null; then new="$base-$s"; fi
-      if tmux rename-session -t "=$s" "$new" 2>/dev/null; then
-        renamed="$renamed $s→$new"
-      fi
-    done < <(tmux list-sessions -F '#{session_name}' 2>/dev/null || true)
+    if [ "$all" = 1 ]; then
+      while IFS= read -r s; do
+        new="$(rename_for_profile "$s" "$base")"
+        [ "$new" != "$s" ] && renamed="$renamed $s→$new"
+      done < <(tmux list-sessions -F '#{session_name}' 2>/dev/null || true)
+    elif [ -n "$scope_sess" ]; then
+      new="$(rename_for_profile "$scope_sess" "$base")"
+      [ "$new" != "$scope_sess" ] && renamed=" $scope_sess→$new"
+      scope_sess="$new"
+    fi
     # Serialize concurrent saves so two clients don't race on `last`. The
     # native `prefix + Ctrl-s` and tmux-continuum's auto-save call save.sh
     # *without* this lock, so keep @continuum-save-interval '0' (see tmux.conf)
@@ -283,14 +349,57 @@ case "$cmd" in
       [ "$locked" = 1 ] && flock -u 9 || true
       die "resurrect save.sh failed — nothing saved for '$name'"
     fi
-    if ! cp -L "$RESURRECT_DIR/last" "$target"; then
+    # Undo copy: stash the snapshot being overwritten in the trash
+    # (recover with: delete <name>, then untrash <name>).
+    if [ -e "$target" ]; then
+      mkdir -p "$TRASH_DIR"
+      cp -f "$target" "$TRASH_DIR/$name.$(date +%Y%m%d-%H%M%S).txt" 2>/dev/null || true
+    fi
+    # save.sh returns before `last` is always visible to an immediate reader
+    # (symlink swap); give it a beat rather than dying on a transient.
+    if [ ! -r "$RESURRECT_DIR/last" ]; then
+      sleep 0.3
+      [ -r "$RESURRECT_DIR/last" ] || { [ "$locked" = 1 ] && flock -u 9 || true; die "save.sh left no snapshot for '$name'"; }
+    fi
+    # Capture from `last` into the profile, filtered to the chosen scope.
+    # Snapshot record fields: $1=type, $2=session. The `state` record names
+    # the client's session for restore's switch-client — point it inside the
+    # kept set so restoring never jumps to an unrelated session.
+    captured=1
+    if [ "$all" = 1 ]; then
+      cp -L "$RESURRECT_DIR/last" "$target.new" 2>/dev/null || captured=0
+    elif [ "$scope_from_target" = 1 ]; then
+      awk -F'\t' -v OFS='\t' '
+        NR==FNR { if ($1=="pane" || $1=="window") keep[$2]=1; next }
+        $1=="pane" || $1=="window" || $1=="grouped_session" { if ($2 in keep) print; next }
+        $1=="state" { if ($2 in keep) print "state", $2
+                      else for (s in keep) { print "state", s; break }
+                      next }
+        { print }
+      ' "$target" "$RESURRECT_DIR/last" > "$target.new" || captured=0
+    else
+      awk -F'\t' -v OFS='\t' -v s="$scope_sess" '
+        $1=="pane" || $1=="window" || $1=="grouped_session" { if ($2 == s) print; next }
+        $1=="state" { print "state", s; next }
+        { print }
+      ' "$RESURRECT_DIR/last" > "$target.new" || captured=0
+    fi
+    if [ "$captured" != 1 ] || [ ! -s "$target.new" ]; then
+      rm -f "$target.new"
       [ "$locked" = 1 ] && flock -u 9 || true
       die "could not capture snapshot for '$name'"
     fi
+    mv -f "$target.new" "$target"
     [ "$locked" = 1 ] && flock -u 9 || true
     set_current "$name"
     read -r ns nw < <(counts "$target")
-    msg "saved '$name' ($(pluralize "$ns" session), $(pluralize "$nw" window))${renamed:+; renamed$renamed}"
+    scope_note=""
+    if [ "$all" != 1 ]; then
+      if [ "$scope_from_target" = 1 ]; then scope_note=" [profile scope]"
+      else scope_note=" [session: $scope_sess]"
+      fi
+    fi
+    msg "saved '$name' ($(pluralize "$ns" session), $(pluralize "$nw" window))$scope_note${renamed:+; renamed$renamed}"
     ;;
 
   restore)
@@ -633,12 +742,21 @@ case "$cmd" in
     marker="${1:-*}"
     c="$(get_current)"
     { [ -n "$c" ] && [ -f "$NAMED_DIR/$c.txt" ] && [ -n "${TMUX:-}" ]; } || exit 0
-    live="$(tmux list-sessions -F '#{session_name} #{session_windows}' 2>/dev/null | LC_ALL=C sort || true)"
-    saved="$(awk -F'\t' '
-        ($1=="window" || $1=="pane") && !(($2 SUBSEP $3) in w) { w[$2 SUBSEP $3]=1; n[$2]++ }
-        END { for (s in n) print s, n[s] }
-      ' "$NAMED_DIR/$c.txt" 2>/dev/null | LC_ALL=C sort || true)"
-    [ "$live" = "$saved" ] || printf '%s' "$marker"
+    # Compare only the sessions the PROFILE contains: per-session profiles
+    # must not flag unrelated live sessions (other projects) as drift. Drift
+    # means: a saved session is missing live, or its window count changed.
+    drift="$( {
+        awk -F'\t' '
+          ($1=="window" || $1=="pane") && !(($2 SUBSEP $3) in w) { w[$2 SUBSEP $3]=1; n[$2]++ }
+          END { for (s in n) printf "S\t%s\t%d\n", s, n[s] }
+        ' "$NAMED_DIR/$c.txt" 2>/dev/null
+        tmux list-sessions -F 'L	#{session_name}	#{session_windows}' 2>/dev/null
+      } | awk -F'\t' '
+        $1=="S" { want[$2]=$3; next }
+        $1=="L" && ($2 in want) { got[$2]=$3 }
+        END { for (s in want) if (!(s in got) || got[s] != want[s]) { print "y"; exit } }
+      ' || true)"
+    [ -z "$drift" ] || printf '%s' "$marker"
     exit 0
     ;;
   restore-current)
@@ -651,12 +769,29 @@ case "$cmd" in
     need_tmux
     c="$(get_current)"
     [ -n "$c" ] || die "no current profile to save to"
+    # --profile-scope: write-back must refresh the profile's OWN sessions.
+    # Scoping to the client's session instead would leak whatever session
+    # you happen to be on into a different project's profile.
     if [ "${1:-}" = "--force" ]; then
-      exec "$SELF" save --force "$c"
+      exec "$SELF" save --force --profile-scope "$c"
     else
-      exec "$SELF" save "$c"
+      exec "$SELF" save --profile-scope "$c"
     fi
     ;;
+  auto-write-back)
+    # Wired to the client-detached hook (tmux.conf). If a current (▶) profile
+    # is set and the live state has drifted from it, silently re-save it —
+    # closing the terminal can never lose a working session again. The
+    # snapshot being replaced is stashed in the trash (see save), so a bad
+    # auto-save is recoverable. Disable with:
+    #   set -g @resurrect-autosave-on-detach '0'
+    [ "$(tmux show-option -gqv '@resurrect-autosave-on-detach' 2>/dev/null || true)" = "0" ] && exit 0
+    c="$(get_current)"
+    { [ -n "$c" ] && [ -f "$NAMED_DIR/$c.txt" ]; } || exit 0
+    [ -n "$("$SELF" status-indicator 2>/dev/null)" ] || exit 0
+    exec "$SELF" save-current --force
+    ;;
+
   restore-recent)
     need_tmux
     [ -d "$NAMED_DIR" ] || die "no saved profiles"
