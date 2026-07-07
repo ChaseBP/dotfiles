@@ -719,7 +719,12 @@ case "${1:-menu}" in
     # -b: return immediately so fzf's abort can close THIS popup first; the
     # sleep lets it tear down (a popup can't open while one is still up).
     # Geometry mirrors the prefix+G binding in tmux.conf.
-    tmux run-shell -b "sleep 0.15; tmux display-popup -c '$client' -E -w 70% -h 70% -T ' saved tmux sessions ' '$SELF'"
+    # The trailing `; true` + redirects matter: display-popup -E blocks until
+    # the NEW popup closes and returns its exit code — esc/ctrl-l abort with
+    # 130 — and run-shell dumps any non-zero status ("'sleep 0.15; …'
+    # returned 130") plus stderr ("popup already displayed" when ctrl-l is
+    # spammed) straight into the pane behind the popup.
+    tmux run-shell -b "sleep 0.15; tmux display-popup -c '$client' -E -w 70% -h 70% -T ' saved tmux sessions ' '$SELF' >/dev/null 2>&1; true"
     ;;
 
   pin-toggle)
