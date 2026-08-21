@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # tmux >= 3.6 (built from source into ~/.local when the system one is older),
-# fzf, TPM, config + helper-script symlinks, and the tmux-sessions launcher.
+# fzf, TPM, the tmux.conf symlink, and the tmux-revive plugin.
 set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
@@ -133,24 +133,39 @@ info "🔗 Linking tmux config..."
 link_file "$DOTFILES_DIR/tmux/tmux.conf" "$HOME/.tmux.conf"
 
 # ------------------------------
-# 5. Link helper scripts
+# 5. tmux-revive (named session profiles)
 # ------------------------------
-info "🔗 Linking tmux helper scripts..."
-run mkdir -p "$HOME/.tmux/scripts"
-run chmod +x "$DOTFILES_DIR/tmux/scripts/"*.sh
-for f in "$DOTFILES_DIR/tmux/scripts/"*.sh; do
-  run ln -sf "$f" "$HOME/.tmux/scripts/$(basename "$f")"
-done
+# tmux.conf declares it as a TPM plugin, but clone it here as well so the
+# bindings work the first time tmux starts rather than only after prefix + I.
+# TPM is happy to find the directory already present. The plugin puts its own
+# `tmux-revive` CLI on PATH (~/.local/bin) when tmux loads it.
+REVIVE_DIR="$HOME/.tmux/plugins/tmux-revive"
+if [ -d "$REVIVE_DIR" ]; then
+  ok "tmux-revive already installed"
+else
+  info "🧬 Installing tmux-revive (github.com/ChaseBP/tmux-revive)..."
+  run git clone --depth 1 https://github.com/ChaseBP/tmux-revive "$REVIVE_DIR"
+fi
 
 # ------------------------------
-# 6. Expose the launcher on PATH
+# 6. Retire the pre-plugin layout
 # ------------------------------
-# `tmux-sessions` opens the session/profile picker BEFORE attaching, so a
-# session is created only when you choose one (no throwaway session left
-# behind). Type it from a plain shell; inside tmux it mirrors prefix + G.
-info "🔗 Linking tmux-sessions command..."
-run mkdir -p "$HOME/.local/bin"
-run ln -sf "$DOTFILES_DIR/tmux/scripts/tmux-sessions.sh" "$HOME/.local/bin/tmux-sessions"
+# Those scripts used to live in this repo under tmux/scripts, symlinked into
+# ~/.tmux/scripts with the launcher exposed as `tmux-sessions`. They ship as the
+# plugin above now, so sweep up the links they left behind. Only symlinks are
+# touched — a real file there belongs to somebody else.
+for stale in "$HOME/.tmux/scripts/resurrect-named.sh" \
+  "$HOME/.tmux/scripts/resurrect-menu.sh" \
+  "$HOME/.tmux/scripts/tmux-sessions.sh" \
+  "$HOME/.local/bin/tmux-sessions"; do
+  if [ -L "$stale" ]; then
+    run rm -f "$stale"
+    ok "removed stale link $(basename "$stale")"
+  fi
+done
+if [ -d "$HOME/.tmux/scripts" ] && [ -z "$(ls -A "$HOME/.tmux/scripts" 2>/dev/null)" ]; then
+  run rmdir "$HOME/.tmux/scripts"
+fi
 
 ok "tmux setup complete"
 info "👉 Start tmux and press Prefix + I to install plugins"

@@ -33,6 +33,8 @@ Designed to be safe, minimal, and easy to reuse across machines.
 ### tmux
 
 - TPM (Tmux Plugin Manager)
+- [tmux-revive](https://github.com/ChaseBP/tmux-revive) — named session
+  profiles, my own plugin (it started life in this repo, then moved out)
 - Session restore & continuum
 - Rose Pine (moon) theme
 - Mouse support + Vim-style navigation
@@ -133,7 +135,25 @@ After launching tmux for the first time:
 Prefix + I
 ```
 
-This installs all tmux plugins via TPM.
+This installs all tmux plugins via TPM. `install_tmux.sh` already clones
+[tmux-revive](https://github.com/ChaseBP/tmux-revive) so its bindings work
+before you get to that.
+
+### Session profiles
+
+`tmux-revive` gives every project its own named session snapshot:
+
+| Key | Does |
+| --- | --- |
+| `Prefix + G` | browse saved profiles (filter, preview, restore, pin, diff) |
+| `Prefix + S` / `Prefix + R` | save the current session / restore one by name |
+| `Prefix + W` | write-back — re-save the current profile from live state |
+| `Prefix + L` / `Prefix + D` | restore the most recent / delete a profile |
+
+Detaching auto-saves the current profile when the live state has drifted, so
+closing a terminal can't lose a session. From a plain shell, `tmux-revive`
+picks a session or profile and attaches — creating one only once you choose.
+Full docs in [the plugin's README](https://github.com/ChaseBP/tmux-revive).
 
 ---
 
