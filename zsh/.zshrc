@@ -34,10 +34,10 @@ setopt EXTENDED_HISTORY          # record timestamps
 
 # ==========================================================
 # Oh My Zsh
-#   Theme left empty on purpose — starship draws the prompt.
+#   robbyrussell — starship is installed but deliberately left off below.
 # ==========================================================
 export ZSH="$HOME/.oh-my-zsh"
-ZSH_THEME=""
+ZSH_THEME="robbyrussell"
 plugins=(
   git
   zsh-autosuggestions
@@ -50,7 +50,9 @@ source "$ZSH/oh-my-zsh.sh"
 #   All of these were installed but only ever initialised in
 #   config.fish, which never ran — zsh is the login shell.
 # ==========================================================
-command -v starship >/dev/null && eval "$(starship init zsh)"
+# starship disabled — using oh-my-zsh robbyrussell instead (they conflict; whichever
+# runs last wins, and starship init comes after oh-my-zsh.sh)
+# command -v starship >/dev/null && eval "$(starship init zsh)"
 command -v zoxide   >/dev/null && eval "$(zoxide init zsh --cmd cd)"
 command -v direnv   >/dev/null && eval "$(direnv hook zsh)"
 command -v mise     >/dev/null && eval "$(mise activate zsh)"
