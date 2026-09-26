@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+# wall - pick / cycle wallpapers through caelestia
+#   wall              thumbnail picker over every collection
+#   wall -d sumi-e    scope to one collection
+#   wall next|prev|random|list|current
+#   wall refresh      restart the caelestia shell so its Wallpapers UI re-indexes
+#   wall /path/to.jpg set an explicit file
+# A "collection" is a subdirectory of ~/Pictures/Wallpapers holding images.
+# Directories named "spares" are ignored.
+set -euo pipefail
+
+ROOT="${WALL_ROOT:-$HOME/Pictures/Wallpapers}"
+THUMBS="$HOME/.cache/wall-thumbs"
+STATE="$HOME/.local/state/caelestia/wallpaper/path.txt"
+mkdir -p "$THUMBS"
+
+SCOPE=""
+if [[ ${1:-} == -d || ${1:-} == --dir ]]; then
+  SCOPE=${2:?wall: -d needs a collection name}; shift 2
+fi
+
+# WALL_DIR pins a single directory and overrides collection discovery
+if [[ -n ${WALL_DIR:-} ]]; then     SEARCH=("$WALL_DIR")
+elif [[ -n $SCOPE ]]; then          SEARCH=("$ROOT/$SCOPE")
+else
+  SEARCH=()
+  while IFS= read -r d; do SEARCH+=("$d"); done < <(
+    find -L "$ROOT" -mindepth 1 -maxdepth 1 -type d ! -name spares | sort)
+  # loose images sitting directly in ROOT count as a collection too
+  SEARCH+=("$ROOT")
+fi
+
+WALLS=()
+for d in "${SEARCH[@]}"; do
+  [[ -d $d ]] || continue
+  while IFS= read -r f; do WALLS+=("$f"); done < <(
+    find -L "$d" -maxdepth 1 -type f \
+      \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.webp' \) | sort)
+done
+(( ${#WALLS[@]} )) || { echo "wall: no images under ${SEARCH[*]}" >&2; exit 1; }
+
+set_wall () { caelestia wallpaper -f "$1"; }
+
+# label: "collection/name" when spanning more than one directory, else bare name
+label_of () {
+  local f=$1 base coll
+  base=$(basename "${f%.*}"); coll=$(basename "$(dirname "$f")")
+  if (( ${#SEARCH[@]} > 1 )) && [[ $coll != "$(basename "$ROOT")" ]]
+    then printf '%s/%s' "$coll" "$base"
+    else printf '%s' "$base"
+  fi
+}
+
+# 256x144 thumbnail cache keyed by collection+name so names can't collide
+thumb () {
+  local src=$1 key t
+  key=$(label_of "$src" | tr / _)
+  t="$THUMBS/$key.png"
+  [[ -f $t && $t -nt $src ]] || magick "$src" -thumbnail 256x144^ \
+      -gravity center -extent 256x144 "$t" 2>/dev/null
+  printf '%s' "$t"
+}
+
+idx_of_current () {
+  local cur i; cur=$(cat "$STATE" 2>/dev/null || true)
+  for i in "${!WALLS[@]}"; do [[ ${WALLS[i]} == "$cur" ]] && { printf '%s' "$i"; return; }; done
+  printf '%s' -1
+}
+
+case "${1:-pick}" in
+  pick)
+    sel=$(for w in "${WALLS[@]}"; do
+            printf '%s\0icon\x1f%s\n' "$(label_of "$w")" "$(thumb "$w")"
+          done | fuzzel --dmenu --index --prompt='wallpaper  ' --lines 12 --width 44) || exit 0
+    set_wall "${WALLS[$sel]}"
+    ;;
+  random|-r)  set_wall "${WALLS[RANDOM % ${#WALLS[@]}]}" ;;
+  next|-n)    i=$(idx_of_current); set_wall "${WALLS[$(( (i+1) % ${#WALLS[@]} ))]}" ;;
+  prev|-p)    i=$(idx_of_current); (( i < 0 )) && i=0
+              set_wall "${WALLS[$(( (i-1+${#WALLS[@]}) % ${#WALLS[@]} ))]}" ;;
+  list|-l)    for w in "${WALLS[@]}"; do printf '%s\n' "$(label_of "$w")"; done ;;
+  paths)      printf '%s\n' "${WALLS[@]}" ;;
+  current|-c) cat "$STATE" 2>/dev/null ;;
+  refresh)
+    # caelestia's recursive wallpaper index collapses to the most recently changed
+    # directory whenever files are added or removed; only a restart rebuilds it fully.
+    caelestia shell -k >/dev/null 2>&1 || true
+    until ! pgrep -x qs >/dev/null 2>&1; do :; done
+    caelestia shell -d >/dev/null 2>&1
+    until caelestia shell -s >/dev/null 2>&1; do :; done
+    n=$(qs -c caelestia ipc call wallpaper list 2>/dev/null | wc -l)
+    echo "caelestia shell reindexed: $n wallpapers"
+    ;;
+  *)          set_wall "$1" ;;
+esac

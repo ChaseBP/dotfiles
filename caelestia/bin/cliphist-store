@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Store clipboard in cliphist UNLESS the owner marked it sensitive.
+# Password managers (KeePassXC, Bitwarden, 1Password, KDE) advertise one of
+# these MIME types alongside the text; cliphist itself has no exclusion list.
+types=$(wl-paste --list-types 2>/dev/null)
+case "$types" in
+  *x-kde-passwordManagerHint*|*application/x-nextcloud-talk*|*x-moz-private*)
+    exit 0 ;;
+esac
+exec cliphist store

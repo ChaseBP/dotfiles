@@ -1,0 +1,19 @@
+{
+  "theme": {
+    "enableTerm": false
+  },
+  "toggles": {
+    "todo": {
+      "todoist": { "enable": false }
+    },
+    "music": {
+      "spotify": { "enable": false },
+      "feishin": { "enable": false }
+    },
+    "sysmon": {
+      "btop": {
+        "command": ["ghostty", "--class=btop", "--title=btop", "-e", "btop"]
+      }
+    }
+  }
+}

@@ -1,0 +1,35 @@
+#!/bin/sh
+# Launch XP-Pen's PenTablet driver with a working tray icon in Caelestia.
+#  - /mini is the only mode in which the driver creates its tray icon at all
+#    (it then starts hidden, so we open the window ourselves afterwards).
+#  - xppen-tray.so disables Qt's quit-on-last-window-closed, so closing the
+#    window hides it to the tray instead of killing the driver. Tray menu
+#    "Exit" still quits.
+#  - QT_QPA_PLATFORM=xcb: the bundled Qt 5.6 only has the xcb plugin and
+#    chokes on the session's "wayland;xcb" list.
+# Running this again while the driver is up just brings the window back.
+
+show() {
+    item=$(busctl --user call org.kde.StatusNotifierWatcher /StatusNotifierWatcher \
+        org.freedesktop.DBus.Properties Get ss org.kde.StatusNotifierWatcher \
+        RegisteredStatusNotifierItems 2>/dev/null |
+        grep -oE "org\.kde\.StatusNotifierItem-$1-[0-9]+" | head -n1)
+    [ -n "$item" ] && busctl --user call "$item" /StatusNotifierItem \
+        org.kde.StatusNotifierItem Activate ii 0 0
+}
+
+pid=$(pgrep -x PenTablet | head -n1)
+if [ -n "$pid" ]; then
+    show "$pid" && exit 0
+    exit 1
+fi
+
+setsid env QT_QPA_PLATFORM=xcb LD_PRELOAD="$HOME/.local/lib/xppen-tray/xppen-tray.so" \
+    /usr/lib/pentablet/PenTablet.sh /mini >/dev/null 2>&1 </dev/null &
+
+# wait for the tray item to register, then open the window
+for _ in $(seq 40); do
+    sleep 0.25
+    pid=$(pgrep -x PenTablet | head -n1)
+    [ -n "$pid" ] && show "$pid" >/dev/null 2>&1 && exit 0
+done

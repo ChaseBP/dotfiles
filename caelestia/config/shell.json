@@ -1,0 +1,41 @@
+{
+    "appearance": {
+        "transparency": {
+            "enabled": false
+        }
+    },
+    "background": {
+        "wallpaperEnabled": true
+    },
+    "dashboard": {
+        "showWeather": false
+    },
+    "general": {
+        "apps": {
+            "explorer": [
+                "thunar"
+            ],
+            "terminal": [
+                "/usr/bin/ghostty",
+                "--gtk-single-instance=true"
+            ]
+        },
+        "idle": {
+            "inhibitWhenAudio": true,
+            "inhibitWhenCharging": false,
+            "lockBeforeSleep": true,
+            "timeouts": [
+                {
+                    "idleAction": "dpms off",
+                    "inhibitWhenAudio": true,
+                    "returnAction": "dpms on",
+                    "timeout": 600
+                },
+                {
+                    "idleAction": "lock",
+                    "timeout": 900
+                }
+            ]
+        }
+    }
+}

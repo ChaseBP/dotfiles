@@ -1,0 +1,6 @@
+# XP-Pen Deco 640 (28bd:2904): the official XP-Pen driver reads the tablet itself and
+# injects its own pointer via uinput. Without this, libinput ALSO binds the raw kernel
+# devices and both drive the cursor at once - the pen then misbehaves whenever the
+# driver is running, and works only when it is closed.
+# Scoped to the physical tablet; the driver's own uinput device is unaffected.
+SUBSYSTEM=="input", ATTRS{idVendor}=="28bd", ATTRS{idProduct}=="2904", ENV{LIBINPUT_IGNORE_DEVICE}="1"

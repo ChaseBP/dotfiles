@@ -1,0 +1,72 @@
+[
+  {
+    "id": "palette",
+    "label": "Shortcut palette",
+    "keys": [
+      "SUPER + K"
+    ],
+    "keywords": "shortcuts keys help cheatsheet",
+    "workflow": "palette"
+  },
+  {
+    "id": "projects",
+    "label": "Open project session picker",
+    "keys": [
+      "SUPER + Space"
+    ],
+    "keywords": "tmux revive resume coding",
+    "workflow": "projects"
+  },
+  {
+    "id": "previous",
+    "label": "Focus previous window",
+    "keys": [
+      "SUPER + Tab"
+    ],
+    "keywords": "switch back last",
+    "workflow": "previous"
+  },
+  {
+    "id": "windows",
+    "label": "Find an open window",
+    "keys": [
+      "SUPER + Slash"
+    ],
+    "keywords": "search app title switch",
+    "workflow": "windows"
+  },
+  {
+    "id": "notes",
+    "label": "Open or hide notes",
+    "keys": [
+      "SUPER + R"
+    ],
+    "keywords": "capture inbox markdown pen writing",
+    "workflow": "notes"
+  },
+  {
+    "id": "notes-choose",
+    "label": "Choose typed or pen notes",
+    "keys": [
+      "SUPER + SHIFT + R"
+    ],
+    "keywords": "rnote notebook handwriting",
+    "workflow": "notes-choose"
+  },
+  {
+    "id": "notes-search",
+    "label": "Search saved notes",
+    "keys": [],
+    "keywords": "find text markdown inbox documents",
+    "workflow": "notes-search"
+  },
+  {
+    "id": "ocr",
+    "label": "Extract text from screen",
+    "keys": [
+      "SUPER + SHIFT + O"
+    ],
+    "keywords": "ocr scan copy image screenshot text",
+    "workflow": "ocr"
+  }
+]

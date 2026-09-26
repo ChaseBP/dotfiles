@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Toggle the on-screen keyboard (wvkbd). Started hidden by Hyprland autostart;
+# SIGUSR2 shows it, SIGUSR1 hides it. State is tracked in a flag file because
+# wvkbd exposes no way to query visibility.
+FLAG="${XDG_RUNTIME_DIR:-/tmp}/wvkbd.shown"
+pgrep -x wvkbd-mobintl >/dev/null || { setsid wvkbd-mobintl -L 320 --hidden >/dev/null 2>&1 </dev/null & sleep 0.3; }
+PID=$(pgrep -x wvkbd-mobintl | head -1)
+case "${1:-toggle}" in
+  show)   kill -USR2 "$PID" 2>/dev/null; : > "$FLAG" ;;
+  hide)   kill -USR1 "$PID" 2>/dev/null; rm -f "$FLAG" ;;
+  toggle) if [ -e "$FLAG" ]; then kill -USR1 "$PID" 2>/dev/null; rm -f "$FLAG"
+          else kill -USR2 "$PID" 2>/dev/null; : > "$FLAG"; fi ;;
+esac

@@ -7,6 +7,7 @@ This repository focuses on a clean, reproducible setup with:
 - Zsh + Oh My Zsh
 - Neovim (Kickstart-based config)
 - tmux + TPM
+- Caelestia (Hyprland + Quickshell) personal layer, incl. a Super+K shortcut palette
 - Node.js (via NVM) and Python venv for editor tooling
 
 Designed to be safe, minimal, and easy to reuse across machines.
@@ -40,6 +41,21 @@ Designed to be safe, minimal, and easy to reuse across machines.
 - Mouse support + Vim-style navigation
 - Config managed via symlink
 
+### Caelestia (Arch / CachyOS desktop)
+
+Layered on top of an existing `caelestia install`; never touches `~/.config/hypr`.
+
+- `hypr-vars.lua` / `hypr-user.lua` / `shell.json` / `cli.json` overrides
+- **Super+K shortcut palette**: a native Quickshell panel styled with Caelestia's
+  own design tokens and the wallpaper's colour scheme (contrast-checked). It lists
+  every live keybind, lets you search it, and runs your workflows.
+  Personal actions live in `actions.json`, which feeds both the Hyprland binds and
+  the palette.
+- Hand-forked shell QML (network UI, background) overlaid on the symlink farm
+- Helper scripts (`wall`, `osk`, `xppen-tablet`, `cliphist-store`) and XP-Pen
+  Deco 640 fixes (tray shim, libinput-ignore udev rule)
+- Everything symlinked per file; originals kept as `*.pre-dotfiles`
+
 ### Tooling Dependencies
 
 - Node.js (LTS via NVM)
@@ -69,11 +85,19 @@ dotfiles/
 ├── tmux/
 │   └── tmux.conf
 │
+├── caelestia/
+│   ├── config/        # → ~/.config/caelestia
+│   ├── quickshell/    # → ~/.config/quickshell/caelestia (forks only)
+│   ├── bin/           # → ~/.local/bin
+│   ├── xppen-tray/    # close-to-tray LD_PRELOAD shim
+│   └── system/        # udev rule (copied to /etc)
+│
 ├── scripts/
 │   ├── install_zsh.sh
 │   ├── install_deps.sh
 │   ├── install_nvim.sh
-│   └── install_tmux.sh
+│   ├── install_tmux.sh
+│   └── install_caelestia.sh
 │
 └── docs/
     ├── screenshots/
@@ -105,7 +129,7 @@ Useful flags:
 ./install.sh --only zsh,tmux    # run a subset of steps
 ./install.sh --skip nvim        # run everything except a step
 ./install.sh --no-sudo          # no sudo: skip system packages, install to ~/.local
-./install.sh --list             # list the steps (zsh deps nvim tmux)
+./install.sh --list             # list the steps (zsh deps nvim tmux caelestia)
 ```
 
 The installer detects apt/dnf/pacman, backs up any real config file it
@@ -161,7 +185,7 @@ Full docs in [the plugin's README](https://github.com/ChaseBP/tmux-revive).
 
 - Node.js is installed via **NVM**, not system packages
 - Windows Terminal theming is configured manually
-- Neovim and tmux configs are symlinked from this repo
+- Neovim, tmux and Caelestia configs are symlinked from this repo
 
 ---
 
