@@ -45,6 +45,10 @@ return {
 
       require('nvim-treesitter').setup()
 
+      -- nvim-treesitter dropped its jsonc parser (listing it warned on every start);
+      -- the json parser handles jsonc files fine.
+      vim.treesitter.language.register('json', 'jsonc')
+
       -- ── Auto-install wanted parsers ──────────────────────────────────
       -- For the languages Neovim 0.12 bundles (c, lua, markdown,
       -- markdown_inline, query, vim, vimdoc) the built-in parsers + queries
@@ -52,7 +56,7 @@ return {
       local wanted = {
         'bash', 'c', 'cmake', 'css', 'dockerfile', 'git_config', 'git_rebase',
         'gitattributes', 'gitcommit', 'gitignore', 'go', 'graphql', 'groovy',
-        'html', 'java', 'javascript', 'json', 'jsonc', 'lua', 'luadoc', 'make',
+        'html', 'java', 'javascript', 'json', 'lua', 'luadoc', 'make',
         'markdown', 'markdown_inline', 'python', 'query', 'regex', 'sql',
         'terraform', 'toml', 'tsx', 'typescript', 'vim', 'vimdoc', 'yaml',
       }
