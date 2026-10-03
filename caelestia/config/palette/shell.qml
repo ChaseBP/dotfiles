@@ -9,9 +9,11 @@ import Quickshell.Io
 import Quickshell.Wayland
 import Quickshell.Hyprland
 import Caelestia.Config
+import "Engine.js" as Engine
 
 // Styled with Caelestia's own design tokens (rounding, padding, fonts, motion) and the
-// wallpaper's M3 roles from palette_theme.py, so it reads as part of the shell.
+// wallpaper's M3 roles (Engine.themeColors), so it reads as part of the shell.
+// Engine.js holds the model; this file renders it and does all I/O natively.
 ShellRoot {
     id: root
     property var page: ({view: "commands", title: "Commands", rows: [], query: "", category: "All"})
@@ -24,6 +26,12 @@ ShellRoot {
     })
     property string error: ""
     property string pendingId: ""
+    property var engine: null
+    property bool indexing: false
+    readonly property string home: Quickshell.env("HOME")
+    readonly property string base: home + "/.config/caelestia"
+    readonly property string stateDir: (Quickshell.env("XDG_STATE_HOME") || home + "/.local/state") + "/caelestia"
+    readonly property string notesRoot: home + "/Documents/Notes"
     property bool ready: false
     property bool closing: false
     property bool touchMode: false
@@ -54,7 +62,7 @@ ShellRoot {
         if (e.kind === "guide") return "menu_book";
         return groupIcons[e.group] || "keyboard_command_key";
     }
-    // The backend marks matches as <b><u>…</u></b>; recolour them instead of underlining.
+    // Engine.marked() marks matches as <b><u>…</u></b>; recolour them instead of underlining.
     function marks(html, color) {
         return (html || "").replace(/<b><u>/g, `<font color="${color}"><b>`).replace(/<\/u><\/b>/g, "</b></font>");
     }
@@ -67,7 +75,13 @@ ShellRoot {
         return out;
     }
     function keyLabel(k) { return ({Left: "←", Right: "→", Up: "↑", Down: "↓", Return: "Enter", mouse_down: "Scroll ↓", mouse_up: "Scroll ↑"})[k] || k; }
-    function send(value) { if (backend.running) backend.write(JSON.stringify(value) + "\n"); }
+    function send(value) {
+        if (!engine) return;
+        let message;
+        try { message = engine.handle(value); }
+        catch (e) { message = {kind: "error", message: String(e.message || e).slice(0, 350)}; }
+        apply(message);
+    }
     function chosen() { return page.rows && list.currentIndex >= 0 ? page.rows[list.currentIndex] : null; }
     function close() {
         if (closing) return;
@@ -91,9 +105,8 @@ ShellRoot {
         else close();
     }
     function apply(message) {
-        if (message.theme) colors = message.theme;
-        if (message.kind === "theme") return;
         if (message.kind === "quit") { close(); return; }
+        if (message.kind === "run") { perform(message.plan); return; }
         if (message.kind === "execute") {
             pendingId = message.id;
             win.visible = false;
@@ -119,21 +132,152 @@ ShellRoot {
             else if (page.view === "details") backButton.forceActiveFocus();
             else search.forceActiveFocus();
         });
+        if (engine && engine.needsNotes) loadNotes();
     }
 
-    Process {
-        id: backend
-        command: ["python3", Quickshell.env("HOME") + "/.config/caelestia/scripts/palette_backend.py"]
-        running: true
-        stdinEnabled: true
-        onStarted: root.send({op: "init"})
-        stdout: SplitParser { onRead: data => { try { root.apply(JSON.parse(data)); } catch (e) { root.error = "Could not read panel data."; } } }
-        stderr: SplitParser { onRead: data => console.warn(data) }
-        onExited: (exitCode, exitStatus) => { if (exitCode !== 0) root.error = "The panel service stopped. Close and reopen with Super+K."; }
+    // ── Native I/O ──
+
+    // Run a command; callback(exitCode, stdout, stderr). A binary that fails to
+    // start never emits exited, so a stopped process without one reports 127.
+    component Job: Process {
+        id: job
+        property var callback
+        property int code: -1
+        property bool done: false
+        property bool collected: false
+        stdout: StdioCollector { id: jobOut; onStreamFinished: { job.collected = true; job.finish(); } }
+        stderr: StdioCollector { id: jobErr }
+        onExited: exitCode => { job.code = exitCode; job.done = true; job.finish(); }
+        onRunningChanged: if (!running) Qt.callLater(() => { if (job && !job.done) { job.code = 127; job.done = true; job.collected = true; job.finish(); } })
+        function finish() {
+            if (!done || !collected || !callback) return;
+            const cb = callback;
+            callback = null;
+            cb(code, jobOut.text, jobErr.text);
+            destroy();
+        }
+    }
+    Component { id: jobComponent; Job {} }
+    function run(command, callback) {
+        jobComponent.createObject(root, {command, callback}).running = true;
+    }
+    function parse(text, fallback) {
+        try { return JSON.parse(text); } catch (e) { return fallback; }
+    }
+    // Synchronous read; null when missing or unreadable. A fresh FileView per read:
+    // re-pointing one at a new path keeps returning the previous file's text.
+    function readFile(path) {
+        const view = readerComponent.createObject(null, {path});
+        const text = view.text();
+        const ok = view.loaded;
+        view.destroy();
+        return ok ? text : null;
+    }
+
+    // Everything the catalog needs, read in parallel; the panel appears once all land.
+    function boot() {
+        const data = {};
+        let waiting = 4;
+        const done = () => {
+            if (--waiting) return;
+            try {
+                if (!data.vars) throw new Error("Could not read Hyprland variables (palette-vars.lua).");
+                const recent = parse(readFile(stateDir + "/palette-recent.json") || "[]", []);
+                engine = new Engine.Model({
+                    entries: Engine.buildCatalog(data.vars, data.binds || [], parse(readFile(base + "/actions.json") || "[]", [])),
+                    active: data.active || {}, clients: data.clients || [],
+                    recent: Array.isArray(recent) ? recent : [],
+                    start: Quickshell.env("CAELESTIA_PALETTE_VIEW") || "commands",
+                });
+                send({op: "init"});
+            } catch (e) {
+                apply({kind: "error", message: String(e.message || e)});
+            }
+        };
+        run(["lua", base + "/scripts/palette-vars.lua"], (code, out) => { data.vars = code === 0 ? parse(out, null) : null; done(); });
+        run(["hyprctl", "-j", "binds"], (code, out) => { data.binds = parse(out, []); done(); });
+        run(["hyprctl", "-j", "clients"], (code, out) => { data.clients = parse(out, []); done(); });
+        run(["hyprctl", "-j", "activewindow"], (code, out) => { data.active = parse(out, {}); done(); });
+    }
+
+    // Notes are indexed only when the notes view first needs them (and on Refresh).
+    // find -type f skips symlinks; hidden files and folders are pruned.
+    function loadNotes() {
+        if (indexing) return;
+        indexing = true;
+        run(["find", notesRoot, "-mindepth", "1", "-name", ".*", "-prune", "-o", "-type", "f", "-printf", "%s\t%P\n"], (code, out) => {
+            const files = out.split("\n").filter(Boolean).map(line => {
+                const tab = line.indexOf("\t");
+                return {size: Number(line.slice(0, tab)), path: line.slice(tab + 1)};
+            });
+            const selection = Engine.selectNoteFiles(files);
+            const notes = [];
+            let skipped = selection.skipped;
+            for (const f of selection.accepted) {
+                const text = readFile(notesRoot + "/" + f.path);
+                if (text === null) skipped++;
+                else notes.push({path: f.path, text});
+            }
+            engine.setNotes(notes, skipped);
+            indexing = false;
+            if (page.view === "notes") apply(engine.snapshot());
+        });
+    }
+
+    // Side effects of a confirmed action. Failures re-show the panel with the reason.
+    function perform(plan) {
+        const fail = reason => apply({kind: "error", message: reason});
+        const remember = () => { if (plan.recent) recentFile.setText(JSON.stringify(plan.recent)); };
+        if (plan.type === "note") {
+            const path = notesRoot + "/" + plan.path;
+            run(["find", path, "-maxdepth", "0", "-type", "f"], (code, out) => {
+                if (code !== 0 || !out.trim()) return fail("This note moved or is no longer available.");
+                Quickshell.execDetached(["ghostty", "--class=local.caelestia.note-search", "--title=Note reference", "-e",
+                                         home + "/.local/bin/nvim", "-R", "-n", "+" + plan.line, "--", path]);
+                close();
+            });
+            return;
+        }
+        const go = () => {
+            if (plan.type === "workflow") {
+                Quickshell.execDetached(["python3", base + "/scripts/workflows.py", plan.name]);
+                remember();
+                close();
+                return;
+            }
+            run(["hyprctl", "eval", plan.code], (code, out, err) => {
+                if (out.trim() !== "ok") return fail(out.trim() || err.trim() || "The action failed.");
+                remember();
+                close();
+            });
+        };
+        if (!plan.focus) return go();
+        // Window/workspace actions target the window that was focused when the panel opened.
+        run(["hyprctl", "-j", "clients"], (code, out) => {
+            if (!parse(out, []).some(c => c.address === plan.focus))
+                return fail("The original window closed. No action was taken.");
+            run(["hyprctl", "eval", 'hl.dispatch(hl.dsp.focus({window = "address:' + plan.focus + '"}))'], (code2, out2, err2) => {
+                if (out2.trim() !== "ok") return fail(out2.trim() || err2.trim() || "Could not focus the original window.");
+                go();
+            });
+        });
+    }
+
+    Component.onCompleted: boot()
+    Component { id: readerComponent; FileView { blockLoading: true; printErrors: false } }
+    FileView { id: recentFile; path: root.stateDir + "/palette-recent.json"; printErrors: false }
+    // Live wallpaper colours: re-read whenever Caelestia rewrites the scheme. A partial
+    // or malformed write parses to null and keeps the current colours.
+    FileView {
+        path: root.stateDir + "/scheme.json"
+        blockLoading: true
+        watchChanges: true
+        printErrors: false
+        onFileChanged: reload()
+        onLoaded: { const scheme = Engine.parseScheme(text()); if (scheme) root.colors = Engine.themeColors(scheme); }
     }
     Timer { id: executeTimer; interval: 120; onTriggered: root.send({op: "execute", id: root.pendingId}) }
     Timer { id: closeTimer; interval: Tokens.anim.durations.small + 20; onTriggered: Qt.quit() }
-    Timer { interval: 1000; repeat: true; running: root.ready; onTriggered: root.send({op: "theme"}) }
     Timer { id: queryTimer; interval: 90; onTriggered: root.send({op: "query", query: search.text, category: root.page.category || "All"}) }
     IpcHandler {
         target: "palette"

@@ -42,12 +42,15 @@ actions are grouped into choosers; searching a number finds individual actions.
 Custom shortcuts and descriptions share `actions.json`. Stock shortcut keys
 are resolved from Caelestia defaults plus user overrides and checked against
 live bindings. Descriptions and explicit action adapters live in
-`scripts/palette_catalog.py`. Upstream changes to existing command behavior
+`palette/Engine.js` (`stockActions`). Any other live bind appears as a Guide,
+labelled by its own Hyprland `description`; upstream's `Category: Description`
+format also sets its category. Upstream changes to existing command behavior
 still require a manual catalog review; live key matching alone cannot verify
 that behavior.
 
-Colors follow Caelestia's `scheme.json`, including light/dark mode, once per
-second while the panel is open. Its surface is opaque. Text colors are checked
+Colors follow Caelestia's `scheme.json`, including light/dark mode, the moment
+it changes (the file is watched; a half-written file keeps the current colors).
+Its surface is opaque. Text colors are checked
 against their background for at least 4.5:1 contrast; selection and outline
 colors use a 3:1 minimum. Unsafe colors fall back to readable alternatives.
 The panel needs no compositor reload after wallpaper changes.
@@ -59,14 +62,19 @@ first matched line in a read-only Neovim window in the notes workspace; close
 it with `:q`. A filename-only match opens line 1. **Refresh** reloads the index.
 Narrow panels place the preview beneath the results.
 
-Search excludes Rnote handwriting, hidden files, and symlinks outside the notes
-folder. Limits are 2 MB per file, 500 files, and 20 MB total; omissions caused by
+Search excludes Rnote handwriting, hidden files and folders, and symlinks. Limits are 2 MB per file, 500 files, and 20 MB total; omissions caused by
 size, access, or indexing limits are disclosed. Note contents and queries are
 not persisted. The five most recent safe command IDs are saved locally.
 
-Implementation: `palette/shell.qml` renders the panel;
-`scripts/palette_backend.py` provides its search, navigation and action model.
-See `PALETTE_DESIGN.md` for research, reasoning and verification.
+Implementation is QML-native, no Python: `palette/shell.qml` renders the panel
+and does all I/O (live binds via `hyprctl`, variables via
+`scripts/palette-vars.lua`, the scheme and notes via Quickshell's `FileView`);
+`palette/Engine.js` holds the catalog, search ranking, navigation stack and
+action safety. Tests: `node --test palette/test_palette.mjs`. Engine.js runs in
+Qt's V4 engine, which lacks `flat`/`flatMap`/`replaceAll` and object spread, has
+an unstable `sort`, and silently fails Unicode property classes; the tests guard
+against these. `scripts/palette.py` only opens and dismisses the panel for
+`workflows.py`.
 
 Shortcut hints appear only in the palette. Routine window actions remain
 silent; custom failures and OCR progress/completion use Caelestia toasts with
