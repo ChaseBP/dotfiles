@@ -69,6 +69,16 @@ Search excludes Rnote handwriting, hidden files and folders, and symlinks. Limit
 size, access, or indexing limits are disclosed. Note contents and queries are
 not persisted. The five most recent safe command IDs are saved locally.
 
+The palette is resident: it starts hidden at login and stays loaded, so Super+K
+is one IPC call (~55 ms) instead of a cold Quickshell start (~380 ms).
+`~/.local/bin/caelestia-palette` toggles it and starts it if it isn't running
+(after a crash, too), so the shortcut always works. Each opening shows the
+last-known catalog instantly and re-reads binds and windows in the background;
+Enter/Details wait for that refresh (at most a moment) so actions never target
+a stale window. Window actions verify, focus and act in one Hyprland Lua call.
+After editing palette files run `caelestia-palette restart`: Quickshell doesn't
+see changes made through the dotfiles symlinks.
+
 Implementation is QML-native, no Python: `palette/shell.qml` renders the panel
 and does all I/O (live binds via `hyprctl`, variables via
 `scripts/palette-vars.lua`, the scheme and notes via Quickshell's `FileView`);
@@ -126,3 +136,4 @@ Normal clipboard-history rules still apply to copied OCR text.
 Original user configs are backed up in
 `backups/workflows-20260926-152846/`. After editing user configuration, run
 `hyprctl reload` and inspect `hyprctl configerrors`.
+

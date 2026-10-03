@@ -278,6 +278,10 @@ function describedBind(description) {
 // actions.json + stock actions, filtered to chords Hyprland really has bound, then
 // every remaining live bind as reference-only, then touchpad gestures.
 function buildCatalog(vars, binds, actions) {
+    // Malformed files or hyprctl output must not break the palette: treat as empty.
+    vars = vars && typeof vars === 'object' && !Array.isArray(vars) ? vars : {};
+    binds = Array.isArray(binds) ? binds.filter(b => b && typeof b === 'object' && 'modmask' in b) : [];
+    actions = Array.isArray(actions) ? actions.filter(a => a && typeof a.id === 'string' && typeof a.label === 'string') : [];
     const enabled = new Set(binds.filter(b => !b.submap).map(liveChord));
     const covered = new Set();
     const result = [];

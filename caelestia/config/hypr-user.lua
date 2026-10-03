@@ -92,11 +92,18 @@ local workflows = "python3 " .. string.format("%q", os.getenv("HOME") .. "/.conf
 local action_file = assert(io.open(os.getenv("HOME") .. "/.config/caelestia/actions.json", "r"))
 local custom_actions = require("utils.json").decode(action_file:read("*a"))
 action_file:close()
+-- An action's "exec" (a ~/.local/bin command line) skips Python: the palette's
+-- launcher is one IPC call, so Super+K stays instant.
+local bin = os.getenv("HOME") .. "/.local/bin/"
 for _, action in ipairs(custom_actions) do
+    local command = action.exec and (bin .. action.exec) or (workflows .. " " .. action.workflow)
     for _, key in ipairs(action.keys) do
-        hl.bind(key, hl.dsp.exec_cmd(workflows .. " " .. action.workflow), { description = action.label })
+        hl.bind(key, hl.dsp.exec_cmd(command), { description = action.label })
     end
 end
+-- Keep the palette resident (hidden) so the first Super+K is instant too. Safe on
+-- every config reload: `start` does nothing when it is already running.
+hl.exec_cmd(bin .. "caelestia-palette start")
 
 -- Reuse Caelestia's former todo workspace as the notes scratchpad.
 hl.window_rule({ match = { class = "local.caelestia.typed-notes" }, workspace = "special:todo", opaque = true, opacity = "1.0 override 1.0 override" })

@@ -37,6 +37,14 @@ test('bind descriptions label uncatalogued binds', () => {
     assert.deepEqual(E.describedBind('Toggle focus timer'), {group: 'Other', label: 'Toggle focus timer'});
 });
 
+test('malformed inputs build an empty-but-valid catalog', () => {
+    for (const [vars, binds, actions] of [[null, null, null], [[], {}, {}], [{}, [null, 'x', {}], [{}, {id: 1}, null]]]) {
+        const rows = E.buildCatalog(vars, binds, actions);
+        assert.ok(Array.isArray(rows));
+        assert.ok(rows.every(r => typeof r.id === 'string' && typeof r.label === 'string'));
+    }
+});
+
 test('search prefers title over synonyms', () => {
     const title = entry('one', 'Open notes');
     const synonym = entry('two', 'Another command', {keywords: 'open notes'});

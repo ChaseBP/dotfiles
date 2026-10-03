@@ -34,6 +34,14 @@ ShellRoot {
     readonly property string notesRoot: home + "/Documents/Notes"
     property bool ready: false
     property bool closing: false
+    // Resident: the instance stays loaded and hides between uses (caelestia-palette).
+    property bool open: false          // panel requested on screen
+    property bool actionHidden: false  // off screen while a chosen action runs
+    property bool fresh: false         // binds/windows re-read since this opening
+    property var cache: null           // last data read: {vars, binds, clients, active, actions}
+    property var deferredRequest: null // Enter/Details pressed before the refresh landed
+    property string startView: "commands"
+    property int session: 0            // bumped per opening; late callbacks from older ones are ignored
     property bool touchMode: false
     readonly property bool compact: panel.width < 620
     // One knob for text density: Caelestia's M3 type roles, scaled down for a dense list.
@@ -77,6 +85,12 @@ ShellRoot {
     function keyLabel(k) { return ({Left: "←", Right: "→", Up: "↑", Down: "↓", Return: "Enter", mouse_down: "Scroll ↓", mouse_up: "Scroll ↑"})[k] || k; }
     function send(value) {
         if (!engine) return;
+        // Acting needs this opening's active window and binds; hold it until they land.
+        if (!fresh && (value.op === "activate" || value.op === "details" || value.enter)) {
+            deferredRequest = value;
+            return;
+        }
+        if (!fresh) deferredRequest = null;  // typing, Back or a new category changes the intent
         let message;
         try { message = engine.handle(value); }
         catch (e) { message = {kind: "error", message: String(e.message || e).slice(0, 350)}; }
@@ -84,10 +98,44 @@ ShellRoot {
     }
     function chosen() { return page.rows && list.currentIndex >= 0 ? page.rows[list.currentIndex] : null; }
     function close() {
-        if (closing) return;
+        if (closing || !open) return;
         closing = true;
         queryTimer.stop();
+        if (!actionHidden) cancelPending();  // Escape withdraws anything not yet started
         closeTimer.start();
+    }
+    function cancelPending() {
+        deferredRequest = null;
+        executeTimer.stop();
+        deferred.stop();
+    }
+    function hide() {
+        open = false;
+        closing = false;
+        actionHidden = false;
+        deferredRequest = null;
+        error = "";
+    }
+    // Shows at once from the last-known catalog, then refreshes in the background.
+    function show(view) {
+        closeTimer.stop();
+        cancelPending();
+        session++;
+        closing = false;
+        startView = view || "commands";
+        error = "";
+        actionHidden = false;
+        fresh = false;
+        if (cache) {
+            try { build(cache, false); }
+            catch (e) { cache = null; }  // never let a bad cache block opening
+        }
+        open = true;
+        refresh();
+    }
+    function toggle(view) {
+        if (open && !closing) close();
+        else show(view);
     }
     function selectStep(delta) {
         if (!page.rows || !page.rows.length) return;
@@ -101,7 +149,7 @@ ShellRoot {
     }
     // Launch a workflow straight from a button (e.g. New note) once the panel is hidden.
     function launchWorkflow(name) {
-        win.visible = false;
+        actionHidden = true;
         deferred.plan = {type: "workflow", name, focus: null, recent: null};
         deferred.start();
     }
@@ -110,18 +158,19 @@ ShellRoot {
         if (page.back) send({op: "back"});
         else close();
     }
-    function apply(message) {
+    // background: a refresh or notes index finishing — keep keyboard focus where it is.
+    function apply(message, background) {
         if (message.kind === "quit") { close(); return; }
         if (message.kind === "run") { perform(message.plan); return; }
         if (message.kind === "execute") {
             pendingId = message.id;
-            win.visible = false;
+            actionHidden = true;
             executeTimer.start();
             return;
         }
         if (message.kind === "error") {
             error = message.message;
-            win.visible = true;
+            actionHidden = false;
             search.forceActiveFocus();
             return;
         }
@@ -131,9 +180,11 @@ ShellRoot {
         ready = true;
         search.text = message.query || "";
         Qt.callLater(() => {
+            if (page !== message) return;  // a newer state replaced this one meanwhile
             let selected = (message.rows || []).findIndex(e => e.id === message.selected);
             list.currentIndex = selected >= 0 ? selected : (message.rows.length ? 0 : -1);
             if (message.scroll) list.contentY = message.scroll;
+            if (background && win.activeFocusItem && win.activeFocusItem !== search) return;
             if (page.view === "confirm") cancelButton.forceActiveFocus();
             else if (page.view === "details") backButton.forceActiveFocus();
             else search.forceActiveFocus();
@@ -180,25 +231,16 @@ ShellRoot {
         return ok ? text : null;
     }
 
-    // Everything the catalog needs, read in parallel; the panel appears once all land.
-    function boot() {
+    // Everything the catalog needs, read in parallel. Variables fall back to the last
+    // good read; windows and binds are always current.
+    function fetch(callback) {
         const data = {};
         let waiting = 4;
         const done = () => {
             if (--waiting) return;
-            try {
-                if (!data.vars) throw new Error("Could not read Hyprland variables (palette-vars.lua).");
-                const recent = parse(readFile(stateDir + "/palette-recent.json") || "[]", []);
-                engine = new Engine.Model({
-                    entries: Engine.buildCatalog(data.vars, data.binds || [], parse(readFile(base + "/actions.json") || "[]", [])),
-                    active: data.active || {}, clients: data.clients || [],
-                    recent: Array.isArray(recent) ? recent : [],
-                    start: Quickshell.env("CAELESTIA_PALETTE_VIEW") || "commands",
-                });
-                send({op: "init"});
-            } catch (e) {
-                apply({kind: "error", message: String(e.message || e)});
-            }
+            data.vars = data.vars || (cache ? cache.vars : null);
+            data.actions = parse(readFile(base + "/actions.json") || "[]", []);
+            callback(data);
         };
         run(["lua", base + "/scripts/palette-vars.lua"], (code, out) => { data.vars = code === 0 ? parse(out, null) : null; done(); });
         run(["hyprctl", "-j", "binds"], (code, out) => { data.binds = parse(out, []); done(); });
@@ -206,11 +248,65 @@ ShellRoot {
         run(["hyprctl", "-j", "activewindow"], (code, out) => { data.active = parse(out, {}); done(); });
     }
 
+    // A model from data. keepState carries this opening's view, query, selection and
+    // scroll (and any indexed notes) across a background refresh.
+    function build(data, keepState) {
+        const recent = parse(readFile(stateDir + "/palette-recent.json") || "[]", []);
+        const next = new Engine.Model({
+            entries: Engine.buildCatalog(data.vars, data.binds || [], data.actions || []),
+            active: data.active || {}, clients: data.clients || [],
+            recent: Array.isArray(recent) ? recent : [],
+            start: keepState ? "commands" : startView,
+        });
+        if (keepState && engine) {
+            if (queryTimer.running) {  // fold in keystrokes still waiting on the debounce
+                queryTimer.stop();
+                engine.handle({op: "query", query: search.text, category: page.category || "All"});
+            }
+            next.state = engine.state;
+            next.stack = engine.stack;
+            next.state.selected = chosen() ? chosen().id : next.state.selected;
+            next.state.scroll = list.contentY;
+            next.notes = engine.notes;
+            next.noteWarning = engine.noteWarning;
+            next.pending = engine.pending;
+            next.pendingEdit = engine.pendingEdit;
+        }
+        engine = next;
+        apply(engine.handle({op: "init"}), keepState);
+    }
+
+    function refresh() {
+        const opening = session;
+        refreshDeadline.restart();
+        fetch(data => {
+            if (opening !== session) return;  // an older opening's data: never apply it
+            refreshDeadline.stop();
+            if (!data.vars) {
+                apply({kind: "error", message: "Could not read Hyprland variables (palette-vars.lua)."});
+                return;
+            }
+            try {
+                build(data, !!engine && ready);
+                cache = data;  // only data that built cleanly is reused next time
+                fresh = true;
+                if (deferredRequest) {
+                    const request = deferredRequest;
+                    deferredRequest = null;
+                    send(request);
+                }
+            } catch (e) {
+                apply({kind: "error", message: String(e.message || e)});
+            }
+        });
+    }
+
     // Notes are indexed only when the notes view first needs them (and on Refresh).
     // find -type f skips symlinks; hidden files and folders are pruned.
     function loadNotes() {
         if (indexing) return;
         indexing = true;
+        const target = engine;
         run(["find", notesRoot, "-mindepth", "1", "-name", ".*", "-prune", "-o", "-type", "f", "-printf", "%s\t%P\n"], (code, out) => {
             const files = out.split("\n").filter(Boolean).map(line => {
                 const tab = line.indexOf("\t");
@@ -224,20 +320,54 @@ ShellRoot {
                 if (text === null) skipped++;
                 else notes.push({path: f.path, text});
             }
-            engine.setNotes(notes, skipped);
             indexing = false;
-            if (page.view === "notes") apply(engine.snapshot());
+            if (engine !== target) {  // the model was rebuilt meanwhile; index for the new one
+                if (engine && engine.needsNotes) loadNotes();
+                return;
+            }
+            engine.setNotes(notes, skipped);
+            if (page.view === "notes") apply(engine.snapshot(), true);
         });
     }
 
     // Side effects of a confirmed action. Failures re-show the panel with the reason.
+    // Window actions run as one Lua chunk: confirm the window still exists, focus it,
+    // confirm focus really landed (dispatch is synchronous), then act — no gap in which
+    // another window could become the target.
+    function guarded(code, address) {
+        const target = JSON.stringify(address);
+        return "local target = " + target + "; local found = false; "
+            + "for _, w in ipairs(hl.get_windows()) do if w.address == target then found = true end end; "
+            + 'if not found then error("PALETTE: The original window closed. No action was taken.") end; '
+            + 'hl.dispatch(hl.dsp.focus({window = "address:" .. target})); '
+            + "local now = hl.get_active_window(); "
+            + 'if not now or now.address ~= target then error("PALETTE: Could not focus the original window. No action was taken.") end; '
+            + code;
+    }
+    // Hyprland's error text, minus the chunk preamble, for our own guard messages.
+    function luaError(out, err) {
+        const text = (out.trim() || err.trim());
+        const own = /PALETTE: (.*)$/m.exec(text);
+        return own ? own[1] : text || "The action failed.";
+    }
+    function toast(message) {
+        Quickshell.execDetached(["qs", "-c", "caelestia", "ipc", "call", "toaster", "error", "Command palette", message, "error"]);
+    }
+
     function perform(plan) {
-        const fail = reason => apply({kind: "error", message: reason});
+        const opening = session;
+        // Results belong to the opening that started the action: a newer opening is
+        // never closed by it, and a late failure becomes a toast instead.
+        const fail = reason => {
+            if (opening === session && open) apply({kind: "error", message: reason});
+            else toast(reason);
+        };
+        const finish = () => { if (opening === session) close(); };
         const remember = () => { if (plan.recent) recentFile.setText(JSON.stringify(plan.recent)); };
         if (plan.type === "note" && plan.edit) {
             // workflows.py owns editable notes: autosave, reuse, notes workspace.
             Quickshell.execDetached(["python3", base + "/scripts/workflows.py", "notes-open", notesRoot + "/" + plan.path, String(plan.line)]);
-            close();
+            finish();
             return;
         }
         if (plan.type === "note") {
@@ -246,36 +376,37 @@ ShellRoot {
                 if (code !== 0 || !out.trim()) return fail("This note moved or is no longer available.");
                 Quickshell.execDetached(["ghostty", "--class=local.caelestia.note-search", "--title=Note reference", "-e",
                                          home + "/.local/bin/nvim", "-R", "-n", "+" + plan.line, "--", path]);
-                close();
+                finish();
             });
             return;
         }
-        const go = () => {
-            if (plan.type === "workflow") {
-                Quickshell.execDetached(["python3", base + "/scripts/workflows.py", plan.name]);
-                remember();
-                close();
-                return;
-            }
-            run(["hyprctl", "eval", plan.code], (code, out, err) => {
-                if (out.trim() !== "ok") return fail(out.trim() || err.trim() || "The action failed.");
-                remember();
-                close();
-            });
+        const workflow = () => {
+            Quickshell.execDetached(["python3", base + "/scripts/workflows.py", plan.name]);
+            remember();
+            finish();
         };
-        if (!plan.focus) return go();
-        // Window/workspace actions target the window that was focused when the panel opened.
-        run(["hyprctl", "-j", "clients"], (code, out) => {
-            if (!parse(out, []).some(c => c.address === plan.focus))
-                return fail("The original window closed. No action was taken.");
-            run(["hyprctl", "eval", 'hl.dispatch(hl.dsp.focus({window = "address:' + plan.focus + '"}))'], (code2, out2, err2) => {
-                if (out2.trim() !== "ok") return fail(out2.trim() || err2.trim() || "Could not focus the original window.");
-                go();
-            });
+        if (plan.type === "workflow" && !plan.focus)
+            return workflow();
+        // Lua actions (and window-targeted workflows' focus step) go through Hyprland.
+        const code = plan.type === "workflow" ? "" : plan.code;
+        run(["hyprctl", "eval", plan.focus ? guarded(code, plan.focus) : code], (exitCode, out, err) => {
+            if (out.trim() !== "ok") return fail(luaError(out, err));
+            if (plan.type === "workflow") return workflow();
+            remember();
+            finish();
         });
     }
 
-    Component.onCompleted: boot()
+    // Always starts hidden, prefetching so the first Super+K is instant. A cold start
+    // is shown by caelestia-palette over IPC once this instance answers — never by an
+    // environment variable, which would reopen the palette on every config reload.
+    Component.onCompleted: fetch(data => {
+        if (cache || !data.vars) return;
+        try {
+            Engine.buildCatalog(data.vars, data.binds || [], data.actions || []);
+            cache = data;
+        } catch (e) {}
+    })
     Component { id: readerComponent; FileView { blockLoading: true; printErrors: false } }
     FileView { id: recentFile; path: root.stateDir + "/palette-recent.json"; printErrors: false }
     // Live wallpaper colours: re-read whenever Caelestia rewrites the scheme. A partial
@@ -290,12 +421,24 @@ ShellRoot {
     }
     Timer { id: executeTimer; interval: 120; onTriggered: root.send({op: "execute", id: root.pendingId}) }
     Timer { id: deferred; property var plan; interval: 120; onTriggered: root.perform(plan) }
-    Timer { id: closeTimer; interval: Tokens.anim.durations.small + 20; onTriggered: Qt.quit() }
+    Timer { id: closeTimer; interval: Tokens.anim.durations.small + 20; onTriggered: root.hide() }
+    // A hung hyprctl/lua must not hold Enter forever: give up on this refresh visibly.
+    Timer {
+        id: refreshDeadline
+        interval: 3000
+        onTriggered: if (root.open && !root.fresh) {
+            root.deferredRequest = null;
+            root.apply({kind: "error", message: "Couldn't re-read windows and shortcuts. Close and reopen to try again."});
+        }
+    }
     Timer { id: queryTimer; interval: 90; onTriggered: root.send({op: "query", query: search.text, category: root.page.category || "All"}) }
     IpcHandler {
         target: "palette"
         function close(): void { root.close(); }
-        function state(): string { return JSON.stringify({view: root.page.view, query: search.text, selected: root.chosen()?.id || "", background: root.colors.surface, count: (root.page.rows || []).length, back: !!root.page.back, error: root.error}); }
+        function toggle(view: string): void { root.toggle(view); }
+        // Not "show": the qs CLI parses that as its own subcommand.
+        function showView(view: string): void { root.show(view); }
+        function state(): string { return JSON.stringify({open: root.open && !root.closing, fresh: root.fresh, view: root.page.view, query: search.text, selected: root.chosen()?.id || "", background: root.colors.surface, count: (root.page.rows || []).length, back: !!root.page.back, error: root.error}); }
     }
 
     // ── Building blocks (mirrors of Caelestia's StyledRect / StyledText / MaterialIcon / StateLayer) ──
@@ -513,7 +656,7 @@ ShellRoot {
 
     PanelWindow {
         id: win
-        visible: true
+        visible: root.open && !root.actionHidden
         color: "transparent"
         screen: Quickshell.screens.find(s => s.name === Hyprland.focusedMonitor?.name) ?? Quickshell.screens[0]
         anchors { top: true; bottom: true; left: true; right: true }
@@ -538,7 +681,7 @@ ShellRoot {
 
         CRect {
             id: panel
-            property real shown: (root.ready || root.error) && !root.closing ? 1 : 0
+            property real shown: root.open && (root.ready || root.error) && !root.closing ? 1 : 0
             Behavior on shown {
                 Anim {
                     duration: root.closing ? Tokens.anim.durations.small : Tokens.anim.durations.expressiveDefaultSpatial

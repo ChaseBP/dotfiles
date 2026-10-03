@@ -6,7 +6,8 @@
       "SUPER + K"
     ],
     "keywords": "shortcuts keys help cheatsheet",
-    "workflow": "palette"
+    "workflow": "palette",
+    "exec": "caelestia-palette toggle"
   },
   {
     "id": "projects",

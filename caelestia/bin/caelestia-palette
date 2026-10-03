@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# Super+K palette launcher. The palette (palette/shell.qml) stays resident and
+# hidden between uses, so opening it is one IPC call (~30 ms) instead of a cold
+# Quickshell start (~380 ms). If it isn't running — first login, or after a
+# crash — it is started and shown in one go, so the shortcut always works.
+#
+#   caelestia-palette [toggle] [VIEW]   show, or hide if showing (Super+K)
+#   caelestia-palette show [VIEW]       show (VIEW: commands | notes)
+#   caelestia-palette hide              hide if showing
+#   caelestia-palette start             start hidden if not running (login)
+#   caelestia-palette restart           stop, then start hidden
+#
+# The config path must stay unresolved: Quickshell keys instances by the path
+# they were started with, and ~/.config/caelestia/palette is a symlink farm.
+set -u
+PALETTE="$HOME/.config/caelestia/palette"
+command=${1:-toggle}
+view=${2:-commands}
+
+# qs exits 0 even for "Target not found"/"Function not found" (an instance still
+# loading, or one running older code), so the reply text decides success too.
+ipc() {
+    local reply
+    reply=$(qs -p "$PALETTE" ipc call palette "$@" 2>&1) || return 1
+    case $reply in *"not found"*|*"No running instances"*) return 1 ;; esac
+}
+# Start hidden (-n: never a second instance; -d: detach). With a view, wait until the
+# new instance answers over IPC and show it there — about 0.4 s on a cold start.
+launch() {
+    qs -p "$PALETTE" -n -d >/dev/null 2>&1
+    [ -n "${1:-}" ] || return 0
+    for _ in $(seq 60); do
+        ipc showView "$1" && return 0
+        sleep 0.03
+    done
+    return 1
+}
+
+case $command in
+    toggle) ipc toggle "$view" || launch "$view" ;;
+    show)   ipc showView "$view" || launch "$view" ;;
+    hide)        ipc close || true ;;
+    start)       ipc state || launch ;;
+    restart)     qs -p "$PALETTE" kill >/dev/null 2>&1; sleep 0.2; launch ;;
+    *)           sed -n '7,11p' "$0" >&2; exit 2 ;;
+esac

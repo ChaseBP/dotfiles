@@ -310,15 +310,18 @@ def ocr():
     ocr_status(f"Copied {len(text):,} characters in {elapsed:.1f}s. Ready to paste.", "success")
 
 
+def palette_launcher(*args):
+    """The resident Super+K palette (bin/caelestia-palette starts it if needed)."""
+    spawn([str(HOME / ".local/bin/caelestia-palette"), *args])
+
+
 def main():
-    import palette
-    this = sys.modules[__name__]
     actions = {"windows": windows, "previous": previous, "notes": notes,
                "notes-choose": lambda: notes(True), "notes-new": notes_new,
                "notes-open": lambda: notes_open(*sys.argv[2:4]), "ocr": ocr,
                "projects": lambda: spawn(["ghostty", "-e", str(HOME/".local/bin/tmux-revive")]),
-               "palette": lambda: palette.palette(this),
-               "notes-search": lambda: palette.search_notes(this)}
+               "palette": lambda: palette_launcher("toggle"),
+               "notes-search": lambda: palette_launcher("show", "notes")}
     # notes-open takes a note path and line; every other action takes nothing.
     arity = 4 if len(sys.argv) > 1 and sys.argv[1] == "notes-open" else 2
     if len(sys.argv) != arity or sys.argv[1] not in actions:
@@ -327,14 +330,12 @@ def main():
     runtime = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp"))
     lock_name = "notes" if action.startswith("notes") else action
     if action in ("palette", "notes-search"):
-        lock_name = "palette-ui"
+        lock_name = "palette"  # the resident palette toggles itself; this only debounces
     # Suppress repeated presses while a picker, launch, or OCR is in progress.
     with (runtime / f"caelestia-workflow-{os.getuid()}-{lock_name}.lock").open("w") as lock:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            if action == "palette":
-                palette.dismiss()
             if action == "ocr":
                 ocr_status("An OCR selection or recognition is already in progress.")
             return
