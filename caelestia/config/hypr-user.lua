@@ -101,3 +101,4 @@ end
 -- Reuse Caelestia's former todo workspace as the notes scratchpad.
 hl.window_rule({ match = { class = "local.caelestia.typed-notes" }, workspace = "special:todo", opaque = true, opacity = "1.0 override 1.0 override" })
 hl.window_rule({ match = { class = "local.caelestia.note-search" }, workspace = "special:todo", opaque = true, opacity = "1.0 override 1.0 override" })
+hl.window_rule({ match = { class = "local.caelestia.note" }, workspace = "special:todo", opaque = true, opacity = "1.0 override 1.0 override" })

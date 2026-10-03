@@ -54,6 +54,15 @@
     "workflow": "notes-choose"
   },
   {
+    "id": "notes-new",
+    "label": "Create a new note",
+    "keys": [
+      "SUPER + SHIFT + N"
+    ],
+    "keywords": "new note markdown file title write",
+    "workflow": "notes-new"
+  },
+  {
     "id": "notes-search",
     "label": "Search saved notes",
     "keys": [],

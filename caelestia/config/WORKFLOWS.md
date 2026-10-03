@@ -13,7 +13,8 @@ are changed.
 | Super+/ | Search open windows by title, app, and workspace |
 | Super+C | Open Neovim inside Ghostty |
 | Super+R | Hide visible notes; resume notes already in the scratchpad; otherwise choose typed or pen notes |
-| Super+Shift+R | Always show the two-option notes chooser |
+| Super+Shift+R | Always show the notes chooser: inbox, new note, or pen notes |
+| Super+Shift+N | Create a new named note and start typing |
 | Super+Shift+O | Select a screen region, recognize English text, and copy it |
 
 Super+M is disabled. Todoist is disabled in the scratchpad configuration.
@@ -59,7 +60,9 @@ Choose **Search saved notes** to search filenames and text under
 `~/Documents/Notes` (`.md`, `.markdown`, `.txt`, `.org`). Each file appears once,
 with a highlighted context preview and matching-line count. Enter opens the
 first matched line in a read-only Neovim window in the notes workspace; close
-it with `:q`. A filename-only match opens line 1. **Refresh** reloads the index.
+it with `:q`. Ctrl+E (or **Edit**) opens it for editing instead, reusing a
+window that already shows that note. A filename-only match opens line 1.
+**New note** creates one; **Refresh** reloads the index.
 Narrow panels place the preview beneath the results.
 
 Search excludes Rnote handwriting, hidden files and folders, and symlinks. Limits are 2 MB per file, 500 files, and 20 MB total; omissions caused by
@@ -74,7 +77,8 @@ action safety. Tests: `node --test palette/test_palette.mjs`. Engine.js runs in
 Qt's V4 engine, which lacks `flat`/`flatMap`/`replaceAll` and object spread, has
 an unstable `sort`, and silently fails Unicode property classes; the tests guard
 against these. `scripts/palette.py` only opens and dismisses the panel for
-`workflows.py`.
+`workflows.py`. Notes workflow tests: `python3 -m unittest test_workflows`
+(from `scripts/`).
 
 Shortcut hints appear only in the palette. Routine window actions remain
 silent; custom failures and OCR progress/completion use Caelestia toasts with
@@ -91,6 +95,15 @@ moving windows.
 - Typed notes: `~/Documents/Notes/Inbox.md`, created on first use. Neovim saves
   edits automatically for this buffer, including when leaving it. Normal
   editor sessions are unaffected.
+- New note (chooser, Super+Shift+N, or the palette): type a title, or press
+  Enter alone for a dated one (`Note 2026-10-03 20.15.md`); Escape cancels and
+  creates nothing. The file gets a `# Title` heading and opens in insert mode
+  under it, autosaving like the inbox. Titles become safe file names (slashes
+  and control characters turn into dashes, no hidden files, `.md` added unless
+  you typed `.txt`/`.org`/`.markdown`), and an existing note is never
+  overwritten: a clash becomes `Title 2.md`. Each note gets its own window
+  (class `local.caelestia.note`) in the notes workspace; Super+R resumes it
+  like the inbox.
 - Pen notes: reuse the most recently focused Rnote window, moving it into the
   scratchpad with its current document intact. When no Rnote window exists,
   create/open `~/Documents/Notes/Pen notes.rnote`. Rnote's own save/autosave

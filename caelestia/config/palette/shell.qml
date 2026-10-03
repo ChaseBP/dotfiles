@@ -49,7 +49,7 @@ ShellRoot {
     readonly property var idIcons: ({
         "notes": "edit_note", "notes-choose": "stylus_note", "windows": "search", "ocr": "document_scanner",
         "notes-search": "manage_search", "projects": "terminal", "kbClipboard": "content_paste",
-        "kbSpecialWs": "layers", "browse": "explore"
+        "kbSpecialWs": "layers", "browse": "explore", "notes-new": "note_add"
     })
 
     function f(tok) { return Qt.font({family: fontFamily || tok.family, pointSize: tok.pointSize * textScale, weight: tok.weight}); }
@@ -94,10 +94,16 @@ ShellRoot {
         list.currentIndex = Math.max(0, Math.min(page.rows.length - 1, list.currentIndex + delta));
         list.positionViewAtIndex(list.currentIndex, ListView.Contain);
     }
-    function activate(details) {
+    function activate(details, edit) {
         const entry = chosen();
         if (!entry) return;
-        send({op: details ? "details" : "activate", id: entry.id, scroll: list.contentY});
+        send({op: details ? "details" : "activate", id: entry.id, scroll: list.contentY, edit: !!edit});
+    }
+    // Launch a workflow straight from a button (e.g. New note) once the panel is hidden.
+    function launchWorkflow(name) {
+        win.visible = false;
+        deferred.plan = {type: "workflow", name, focus: null, recent: null};
+        deferred.start();
     }
     function back() {
         queryTimer.stop();
@@ -228,6 +234,12 @@ ShellRoot {
     function perform(plan) {
         const fail = reason => apply({kind: "error", message: reason});
         const remember = () => { if (plan.recent) recentFile.setText(JSON.stringify(plan.recent)); };
+        if (plan.type === "note" && plan.edit) {
+            // workflows.py owns editable notes: autosave, reuse, notes workspace.
+            Quickshell.execDetached(["python3", base + "/scripts/workflows.py", "notes-open", notesRoot + "/" + plan.path, String(plan.line)]);
+            close();
+            return;
+        }
         if (plan.type === "note") {
             const path = notesRoot + "/" + plan.path;
             run(["find", path, "-maxdepth", "0", "-type", "f"], (code, out) => {
@@ -277,6 +289,7 @@ ShellRoot {
         onLoaded: { const scheme = Engine.parseScheme(text()); if (scheme) root.colors = Engine.themeColors(scheme); }
     }
     Timer { id: executeTimer; interval: 120; onTriggered: root.send({op: "execute", id: root.pendingId}) }
+    Timer { id: deferred; property var plan; interval: 120; onTriggered: root.perform(plan) }
     Timer { id: closeTimer; interval: Tokens.anim.durations.small + 20; onTriggered: Qt.quit() }
     Timer { id: queryTimer; interval: 90; onTriggered: root.send({op: "query", query: search.text, category: root.page.category || "All"}) }
     IpcHandler {
@@ -851,7 +864,7 @@ ShellRoot {
                             }
                             SText { text: root.ready ? "No matches" : "Loading…"; font: root.f(Tokens.font.title.medium); Layout.alignment: Qt.AlignHCenter }
                             SText {
-                                text: root.page.view === "notes" ? "Try a filename or another word. Create typed notes with Super+R." : "Try “notes”, “scan”, or “window”, or choose another category."
+                                text: root.page.view === "notes" ? "Try a filename or another word, or start one with New note (Super+Shift+N)." : "Try “notes”, “scan”, or “window”, or choose another category."
                                 color: root.c("onSurfaceVariant"); wrapMode: Text.Wrap
                                 Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter
                             }
@@ -1030,28 +1043,49 @@ ShellRoot {
                 RowLayout {
                     Layout.fillWidth: true
                     spacing: Tokens.spacing.large
-                    Repeater {
-                        model: root.page.view === "details" || root.page.view === "confirm"
-                            ? [["Tab", "Move"], ["Enter", "Choose"], ["Esc", "Back"]]
-                            : root.compact || root.page.view === "notes"
-                            ? [["↑↓", "Navigate"], ["Enter", "Open"], ["Esc", "Back"]]
-                            : [["↑↓", "Navigate"], ["Enter", "Run"], ["Ctrl+I", "Details"], ["Esc", "Back"]]
+                    // Hints take whatever room the buttons leave and clip, so a crowded
+                    // footer can never stretch the panel.
+                    Item {
+                        Layout.fillWidth: true
+                        Layout.minimumWidth: 0
+                        implicitWidth: hints.implicitWidth
+                        implicitHeight: hints.implicitHeight
+                        clip: true
                         RowLayout {
-                            required property var modelData
-                            spacing: 6
-                            Chord { keys: modelData[0] === "↑↓" ? "↑+↓" : modelData[0] }
-                            SText { text: modelData[1]; font: root.f(Tokens.font.label.medium); color: root.c("onSurfaceVariant") }
+                            id: hints
+                            anchors.verticalCenter: parent.verticalCenter
+                            spacing: Tokens.spacing.large
+                            Repeater {
+                                model: root.page.view === "details" || root.page.view === "confirm"
+                                    ? [["Tab", "Move"], ["Enter", "Choose"], ["Esc", "Back"]]
+                                    : root.compact || root.page.view === "notes"
+                                    ? [["↑↓", "Navigate"], ["Enter", "Open"], ["Esc", "Back"]]
+                                    : [["↑↓", "Navigate"], ["Enter", "Run"], ["Ctrl+I", "Details"], ["Esc", "Back"]]
+                                RowLayout {
+                                    required property var modelData
+                                    spacing: 6
+                                    Chord { keys: modelData[0] === "↑↓" ? "↑+↓" : modelData[0] }
+                                    SText { text: modelData[1]; font: root.f(Tokens.font.label.medium); color: root.c("onSurfaceVariant") }
+                                }
+                            }
                         }
                     }
-                    Item { Layout.fillWidth: true }
                     PillButton { text: "Browse all"; glyph: "explore"; tone: "text"; small: true; visible: root.page.view === "commands" && panel.width >= 720; onClicked: root.send({op: "query", query: "", category: "Browse all"}) }
                     PillButton { text: "Details"; glyph: "info"; tone: "text"; small: true; visible: root.page.view === "commands" || root.page.view === "family"; enabled: root.chosen() !== null; onClicked: root.activate(true) }
-                    PillButton { text: "Refresh"; glyph: "refresh"; tone: "text"; small: true; visible: root.page.view === "notes"; onClicked: root.send({op: "refresh"}) }
+                    PillButton { text: "New note"; glyph: "note_add"; tone: "text"; small: true; visible: root.page.view === "notes"; onClicked: root.launchWorkflow("notes-new") }
+                    PillButton {
+                        text: "Edit"; glyph: "edit"; tone: "text"; small: true
+                        visible: root.page.view === "notes" && panel.width >= 620; enabled: root.chosen() !== null
+                        ToolTip.visible: hovered; ToolTip.text: "Edit this note (Ctrl+E)"; ToolTip.delay: 500
+                        onClicked: root.activate(false, true)
+                    }
+                    PillButton { text: "Refresh"; glyph: "refresh"; tone: "text"; small: true; visible: root.page.view === "notes" && panel.width >= 720; onClicked: root.send({op: "refresh"}) }
                 }
             }
         }
         Shortcut { sequence: "Escape"; onActivated: root.back() }
         Shortcut { sequence: "Ctrl+I"; enabled: root.page.view === "commands" || root.page.view === "family"; onActivated: root.activate(true) }
         Shortcut { sequence: "Alt+Left"; onActivated: root.back() }
+        Shortcut { sequence: "Ctrl+E"; enabled: root.page.view === "notes"; onActivated: root.activate(false, true) }
     }
 }

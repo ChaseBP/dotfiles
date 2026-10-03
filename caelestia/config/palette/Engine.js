@@ -14,8 +14,9 @@ const FAMILIES = {
 };
 const DETAILS = {
     'notes': 'Show or hide your notes workspace. If no notes are open there, choose typed or pen notes. Hiding keeps your work open.',
-    'notes-choose': 'Choose typed notes or pen notes. Existing note windows are reused; choosing Rnote brings its current document into the notes workspace.',
-    'notes-search': 'Search typed notes by filename and content. Results open read-only at the matched line. Handwriting inside Rnote notebooks is not indexed.',
+    'notes-choose': 'Choose the typed-notes inbox, a new named note, or pen notes. Existing note windows are reused; choosing Rnote brings its current document into the notes workspace.',
+    'notes-new': 'Type a title (or press Enter alone for a dated one). A new Markdown file is created in Documents/Notes — never overwriting an existing note — and opens in the notes workspace, ready to type. Edits save automatically.',
+    'notes-search': 'Search typed notes by filename and content. Enter opens the matched line read-only; Ctrl+E opens it for editing. Handwriting inside Rnote notebooks is not indexed.',
     'ocr': 'Select a screen region. English text is recognized locally and copied without auto-pasting. Progress and copied-character count appear in a toast. Escape cancels selection.',
     'projects': 'Open your tmux-revive session and profile picker in a new terminal. Attaching a session that is already open creates another synchronized view of that session.',
     'previous': 'Focus the most recently used eligible window across workspaces. This does not create or duplicate windows.',
@@ -32,7 +33,8 @@ const SUMMARIES = {
     'notes-search': 'Find a filename or something you wrote',
     'projects': 'Resume a tmux session or saved profile',
     'previous': 'Return to your last window across workspaces',
-    'notes-choose': 'Choose Markdown or handwriting',
+    'notes-choose': 'Inbox, a new note, or handwriting',
+    'notes-new': 'Name a fresh Markdown note and start typing',
 };
 const CONFIRMATIONS = {
     kbSleep: 'Suspend this computer? Running calls and network connections may be interrupted.',
@@ -457,7 +459,7 @@ class Model {
                 subtitle: terms.length ? `${hits.length} matching lines · line ${line + 1}` : 'Read-only reference',
                 key: '', section: 'Notes', kind: 'note', disabled: false, badge: 'Open',
                 preview: marked(excerpt || 'Empty note', q).replace(/\n/g, '<br>'), previewPlain: excerpt,
-                hits: hits.slice(0, 100).map(j => j + 1), detail: `Opens line ${line + 1} in a read-only notes window.`,
+                hits: hits.slice(0, 100).map(j => j + 1), detail: `Enter opens line ${line + 1} read-only; Ctrl+E edits it.`,
             });
         });
         const nq = normalized(q);
@@ -540,6 +542,7 @@ class Model {
                 this.push('notes');
             } else if (ident.startsWith('note:')) {
                 this.pending = ident;
+                this.pendingEdit = request.edit === true;
                 return {kind: 'execute', id: ident};
             } else {
                 const e = this.lookup[ident];
@@ -571,7 +574,7 @@ class Model {
     plan(ident) {
         if (ident.startsWith('note:')) {
             const [, index, line] = ident.split(':');
-            return {type: 'note', path: this.notes[Number(index)].path, line: Number(line)};
+            return {type: 'note', path: this.notes[Number(index)].path, line: Number(line), edit: !!this.pendingEdit};
         }
         const e = this.lookup[ident];
         const focus = (e.group === 'Windows' || e.group === 'Workspaces') && this.active.address ? this.active.address : null;

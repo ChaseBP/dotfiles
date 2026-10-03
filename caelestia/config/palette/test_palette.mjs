@@ -123,6 +123,17 @@ test('notes group matches and escape markup', () => {
     assert.doesNotMatch(r.rows[0].preview, /<img/);
 });
 
+test('notes open read-only by default and for editing on request', () => {
+    const notes = notesOf([{path: 'Ideas.md', size: 20, text: '# Ideas\nrocket'}]);
+    const m = model([], {start: 'notes', notes});
+    const row = m.handle({op: 'query', query: 'rocket', category: 'All'}).rows[0];
+    assert.equal(m.handle({op: 'activate', id: row.id}).kind, 'execute');
+    assert.deepEqual(m.handle({op: 'execute', id: row.id}).plan, {type: 'note', path: 'Ideas.md', line: 2, edit: false});
+    m.handle({op: 'query', query: 'rocket', category: 'All'});
+    m.handle({op: 'activate', id: row.id, edit: true});
+    assert.deepEqual(m.handle({op: 'execute', id: row.id}).plan, {type: 'note', path: 'Ideas.md', line: 2, edit: true});
+});
+
 test('oversized notes are disclosed; notes view waits for indexing', () => {
     const m = model([], {start: 'notes', notes: notesOf([{path: 'large.md', size: 2000001, text: 'x'}])});
     assert.match(m.snapshot().notice, /1 files omitted/);

@@ -3,6 +3,7 @@
 import fcntl
 import json
 import os
+from datetime import datetime
 from pathlib import Path
 import re
 import subprocess
@@ -14,7 +15,14 @@ HOME = Path.home()
 NOTES = HOME / "Documents" / "Notes"
 WORKSPACE = "special:todo"
 TYPED_CLASS = "local.caelestia.typed-notes"
+NOTE_CLASS = "local.caelestia.note"  # editable notes other than the inbox
 PEN_CLASSES = {"com.github.flxzt.rnote", "rnote"}
+NOTE_SUFFIXES = (".md", ".markdown", ".txt", ".org")
+# Buffer-local saves keep normal editor behavior untouched elsewhere.
+AUTOSAVE = ("lua vim.api.nvim_create_autocmd({'TextChanged','TextChangedI','InsertLeave',"
+            "'FocusLost','BufLeave'},{buffer=0,callback=function() "
+            "if vim.bo.modified and vim.bo.modifiable and not vim.bo.readonly then "
+            "vim.cmd('silent update') end end})")
 
 
 def run(args, **kwargs):
@@ -140,6 +148,99 @@ def spawn(args):
     return child
 
 
+def note_filename(title, existing, now=None):
+    """File name for a new note titled `title`, never one of `existing`.
+
+    Slashes and control characters become dashes, leading dots go (no hidden
+    files), and a missing note extension becomes .md. An empty title gets a
+    dated name. Clashes count up: "Idea.md", "Idea 2.md", "Idea 3.md".
+    """
+    title = " ".join(re.sub(r"[/\\\x00-\x1f\x7f]", "-", title).split()).lstrip(".").strip(" .-")
+    if not title:
+        title = (now or datetime.now()).strftime("Note %Y-%m-%d %H.%M")
+    stem, suffix = title, ".md"
+    for ending in NOTE_SUFFIXES:
+        if title.lower().endswith(ending) and len(title) > len(ending):
+            stem, suffix = title[:-len(ending)].rstrip(" ."), title[-len(ending):]
+            break
+    stem = stem[:80].rstrip(" .") or "Note"
+    taken = {name.casefold() for name in existing}
+    name, number = stem + suffix, 1
+    while name.casefold() in taken:
+        number += 1
+        name = f"{stem} {number}{suffix}"
+    return name
+
+
+def note_heading(name):
+    stem = name.rsplit(".", 1)[0]
+    return f"# {stem}\n\n"
+
+
+def open_note_window(args, is_kind, clients):
+    """Spawn args, then move the first new window that is_kind accepts into the
+    notes workspace. Only claims windows created by this call."""
+    before = {c["address"] for c in clients}
+    spawn(args)
+    for _ in range(60):
+        for client in ipc("clients"):
+            if is_kind(client) and client["address"] not in before:
+                show_notes(client)
+                return
+        time.sleep(0.1)
+    notify("Notes did not open in time. Try again.", error=True)
+
+
+def edit_note(path, line=None, extra=()):
+    """Editable Neovim on a note in the notes workspace, autosaving. A window
+    already showing this note is reused (no duplicate editors or swap prompts)."""
+    path = Path(path).resolve()
+    clients = recent(ipc("clients"))
+    inbox = path == (NOTES / "Inbox.md").resolve()
+    title = "Typed notes" if inbox else "Note — " + str(path.relative_to(NOTES.resolve()))
+    klass = TYPED_CLASS if inbox else NOTE_CLASS
+    existing = [c for c in clients if c["class"] == klass and (inbox or c.get("title") == title)]
+    if existing:
+        show_notes(existing[0])
+        return
+    position = ["+" + str(line)] if line else []
+    open_note_window(["ghostty", "--class=" + klass, "--title=" + title, "-e",
+                      str(HOME / ".local/bin/nvim"), "-c", AUTOSAVE, *extra, *position, "--", str(path)],
+                     lambda c: c["class"] == klass, clients)
+
+
+def notes_new():
+    """Ask for a title, create the note, and open it ready to type."""
+    result = subprocess.run(
+        ["fuzzel", "--dmenu", "--prompt-only=New note  ",
+         "--placeholder=Title — Enter alone makes a dated note", "--width", "52"],
+        input="", capture_output=True, text=True)
+    if result.returncode != 0:
+        return  # Escape cancels without creating anything.
+    NOTES.mkdir(parents=True, exist_ok=True)
+    name = note_filename(result.stdout.strip(), [p.name for p in NOTES.iterdir()])
+    path = NOTES / name
+    with path.open("x") as handle:  # never overwrite, even if a file appeared meanwhile
+        handle.write(note_heading(name))
+    # Cursor on the empty line under the heading, already in insert mode.
+    edit_note(path, line=2, extra=("-c", "startinsert"))
+
+
+def notes_open(path, line):
+    """Open an existing note for editing (from the palette's note search)."""
+    path = Path(path)
+    if (not path.is_file() or path.is_symlink()
+            or not path.resolve().is_relative_to(NOTES.resolve())
+            or path.suffix.lower() not in NOTE_SUFFIXES):
+        raise ValueError("That note moved or is not in Documents/Notes.")
+    edit_note(path, line=max(1, int(line)))
+
+
+NOTE_CHOICES = ["Typed notes  —  Markdown inbox",
+                "New note  —  name a fresh Markdown file",
+                "Pen notes  —  Rnote notebook"]
+
+
 def notes(force_choose=False):
     clients = recent(ipc("clients"))
     if not force_choose:
@@ -148,49 +249,37 @@ def notes(force_choose=False):
             dispatch('hl.dsp.workspace.toggle_special("todo")')
             return
         existing = [c for c in clients if c["workspace"]["name"] == WORKSPACE
-                    and (c["class"] == TYPED_CLASS or c["class"] in PEN_CLASSES)]
+                    and (c["class"] in (TYPED_CLASS, NOTE_CLASS) or c["class"] in PEN_CLASSES)]
         if existing:
             show_notes(existing[0])
             return
 
-    choice = picker(["Typed notes  —  Markdown inbox", "Pen notes  —  Rnote notebook"], "Notes > ")
+    choice = picker(NOTE_CHOICES, "Notes > ")
     if choice is None:
         return
+    if choice == 1:
+        notes_new()
+        return
+    pen = choice == 2
+    is_kind = (lambda c: c["class"] in PEN_CLASSES) if pen else (lambda c: c["class"] == TYPED_CLASS)
     # Refresh after the chooser; use the most recently focused matching window.
-    matches = recent([c for c in ipc("clients")
-                      if (c["class"] == TYPED_CLASS if choice == 0 else c["class"] in PEN_CLASSES)])
+    matches = recent([c for c in ipc("clients") if is_kind(c)])
     if matches:
         show_notes(matches[0])
         return
 
     NOTES.mkdir(parents=True, exist_ok=True)
-    if choice == 0:
+    if not pen:
         inbox = NOTES / "Inbox.md"
         if not inbox.exists():
             inbox.write_text("# Inbox\n\n")
-        # Buffer-local saves keep normal editor behavior untouched elsewhere.
-        autosave = ("lua vim.api.nvim_create_autocmd({'TextChanged','TextChangedI','InsertLeave',"
-                    "'FocusLost','BufLeave'},{buffer=0,callback=function() "
-                    "if vim.bo.modified and vim.bo.modifiable and not vim.bo.readonly then "
-                    "vim.cmd('silent update') end end})")
-        spawn(["ghostty", "--class=" + TYPED_CLASS, "--title=Typed notes", "-e",
-               str(HOME / ".local/bin/nvim"), "-c", autosave, str(inbox)])
+        open_note_window(["ghostty", "--class=" + TYPED_CLASS, "--title=Typed notes", "-e",
+                          str(HOME / ".local/bin/nvim"), "-c", AUTOSAVE, str(inbox)], is_kind, clients)
     else:
         notebook = NOTES / "Pen notes.rnote"
         if not notebook.exists():
             run(["rnote-cli", "create", str(notebook)])
-        spawn(["rnote", str(notebook)])
-
-    # Only claim windows created by this action, never an unrelated existing app.
-    before = {c["address"] for c in clients}
-    for _ in range(60):
-        for client in ipc("clients"):
-            matches_kind = client["class"] == TYPED_CLASS if choice == 0 else client["class"] in PEN_CLASSES
-            if matches_kind and client["address"] not in before:
-                show_notes(client)
-                return
-        time.sleep(0.1)
-    notify("Notes did not open in time. Try Super+R again.", error=True)
+        open_note_window(["rnote", str(notebook)], is_kind, clients)
 
 
 def ocr():
@@ -225,12 +314,15 @@ def main():
     import palette
     this = sys.modules[__name__]
     actions = {"windows": windows, "previous": previous, "notes": notes,
-               "notes-choose": lambda: notes(True), "ocr": ocr,
+               "notes-choose": lambda: notes(True), "notes-new": notes_new,
+               "notes-open": lambda: notes_open(*sys.argv[2:4]), "ocr": ocr,
                "projects": lambda: spawn(["ghostty", "-e", str(HOME/".local/bin/tmux-revive")]),
                "palette": lambda: palette.palette(this),
                "notes-search": lambda: palette.search_notes(this)}
-    if len(sys.argv) != 2 or sys.argv[1] not in actions:
-        raise SystemExit("Usage: workflows.py {" + "|".join(actions) + "}")
+    # notes-open takes a note path and line; every other action takes nothing.
+    arity = 4 if len(sys.argv) > 1 and sys.argv[1] == "notes-open" else 2
+    if len(sys.argv) != arity or sys.argv[1] not in actions:
+        raise SystemExit("Usage: workflows.py {" + "|".join(actions) + "} (notes-open PATH LINE)")
     action = sys.argv[1]
     runtime = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp"))
     lock_name = "notes" if action.startswith("notes") else action
