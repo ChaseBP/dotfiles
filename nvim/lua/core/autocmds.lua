@@ -34,6 +34,14 @@ vim.api.nvim_create_autocmd('TextYankPost', {
 vim.api.nvim_create_autocmd('BufReadPost', {
   group = augroup 'restore-cursor',
   callback = function(event)
+    -- An explicit line (`nvim +42 file` or `nvim -c 42 file`) wins over the
+    -- remembered position.
+    local argv = vim.v.argv
+    for i, arg in ipairs(argv) do
+      if arg:match '^%+%d+$' or (arg == '-c' and (argv[i + 1] or ''):match '^%d+$') then
+        return
+      end
+    end
     local mark = vim.api.nvim_buf_get_mark(event.buf, '"')
     local line_count = vim.api.nvim_buf_line_count(event.buf)
     if mark[1] > 0 and mark[1] <= line_count then
