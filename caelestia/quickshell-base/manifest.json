@@ -1,0 +1,17 @@
+{
+  "caelestia-shell": "2.5.0-1",
+  "files": {
+    "modules/background/Background.qml": "dc99ebea9dee7893a185322d07348b3f7b54337e55bc71626b0c755d9dfa1ddd",
+    "modules/background/Wallpaper.qml": "8339a889dd31202cb909b2423845f7f8f9e5990ac8545fe6aa600375036cadea",
+    "modules/nexus/NexusState.qml": "47f45e67f005e62fb2dd9f4742c01cddb1b4c6ee6fa262d2c363520896b79029",
+    "modules/nexus/PageCompRegistry.qml": "ce2d0c6a670f77e2e3ee32af7a13959731e9ae057f9b953446f7ecce5c54d431",
+    "modules/nexus/common/NetworkList.qml": "57585f622595d32b6344aa4677d543f186a9755be6b92fd0a9ce97116a3ad715",
+    "modules/nexus/pages/network/NetworkDetailPage.qml": "c1a7b44f0574c7e24965723569d7d12fb00b0f7a269a2a321b1dd15719fb5087",
+    "modules/nexus/pages/network/SavedNetworksPage.qml": "e4f490fd163b0a335afa227685a117f66e8277d7aa266b540f480387f52bacaa",
+    "services/Nmcli.qml": "e7f2dd58d2237fa2fa5c9b8da7b560fc42c2cb5008d62e5a2fa998c9ccfd905c",
+    "shell.qml": "2f565b2496db98684b1799a8961e7e7669723b3bad4cb84426d39036b7366fbb",
+    "utils/NetworkConnection.qml": "a582528bf3c456151e74c672ce11c18bf12775231fd07810d65f645d4882ff63"
+  },
+  "note": "Initial base recorded 2026-10-03 from caelestia-shell 2.5.0. The forks predate it (Sept 2025 tree) and the original base was not kept; they load cleanly against 2.5.0, so drift is measured from here. caelestia-doctor flags any later upstream change to these files.",
+  "recorded": "2026-10-03"
+}

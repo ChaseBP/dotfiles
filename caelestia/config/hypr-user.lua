@@ -105,6 +105,14 @@ end
 -- every config reload: `start` does nothing when it is already running.
 hl.exec_cmd(bin .. "caelestia-palette start")
 
+-- After package upgrades, check the personal Caelestia layer once per session start:
+-- silent unless Caelestia/Hyprland/Quickshell/Qt versions changed since the last
+-- healthy run, and then one toast only if something needs attention. The delay lets
+-- the shell finish starting first. Details: caelestia-doctor (in a terminal).
+hl.on("hyprland.start", function()
+    hl.exec_cmd("sleep 45; " .. bin .. "caelestia-doctor --login")
+end)
+
 -- Reuse Caelestia's former todo workspace as the notes scratchpad.
 hl.window_rule({ match = { class = "local.caelestia.typed-notes" }, workspace = "special:todo", opaque = true, opacity = "1.0 override 1.0 override" })
 hl.window_rule({ match = { class = "local.caelestia.note-search" }, workspace = "special:todo", opaque = true, opacity = "1.0 override 1.0 override" })

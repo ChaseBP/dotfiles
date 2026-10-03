@@ -137,3 +137,26 @@ Original user configs are backed up in
 `backups/workflows-20260926-152846/`. After editing user configuration, run
 `hyprctl reload` and inspect `hyprctl configerrors`.
 
+## Health check after updates
+
+`caelestia-doctor` checks the whole personal layer in under a second, read-only:
+
+- the symlink farm against the installed caelestia-shell (missing links are what
+  make the shell die with "X is not a type");
+- the 11 forked shell QML files against their recorded upstream base
+  (`~/dotfiles/caelestia/quickshell-base`), so upstream changes you haven't
+  merged are flagged with the diff to review;
+- the running shell's log, and whether it predates a package upgrade;
+- that the palette compiles and every Caelestia design token it uses exists,
+  and that the resident instance runs current code;
+- Hyprland config errors, Lua syntax, every `actions.json` shortcut bound;
+- the palette, notes and doctor tests; workflow tools; stale tree-sitter locks.
+
+`caelestia-doctor --fix` applies only the safe repairs (missing/dangling farm
+links, palette start/restart, stale tree-sitter locks) and never edits your
+files. After merging upstream changes into a fork, record the new base with
+`caelestia-doctor --accept-upstream <file>`. At each Hyprland start it runs once
+with `--login`: silent unless Caelestia, Hyprland, Quickshell or Qt changed
+version since the last healthy run, and then one toast only if something needs
+attention. Exit codes: 0 healthy, 1 warnings, 2 failures.
+

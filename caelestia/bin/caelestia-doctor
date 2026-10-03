@@ -1,0 +1,581 @@
+#!/usr/bin/env python3
+"""Health check for the personal Caelestia layer — run it after `caelestia update`.
+
+Read-only by default: it reports, and prints the exact command for every repair.
+
+    caelestia-doctor                  check everything
+    caelestia-doctor --fix            also apply the safe repairs (missing farm links,
+                                      dangling links, stale palette, stale tree-sitter locks)
+    caelestia-doctor --accept-upstream [FILE...]
+                                      after reviewing upstream changes to forked QML
+                                      (see the diff it prints), record them as the new base
+    caelestia-doctor --json           machine-readable findings
+    caelestia-doctor --login          at login: silent unless Caelestia/Hyprland/Quickshell/Qt
+                                      versions changed since the last run; one toast if not healthy
+
+Exit codes: 0 healthy, 1 warnings, 2 failures, 3 the doctor itself failed.
+"""
+import argparse
+import fcntl
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+
+HOME = Path.home()
+FARM = HOME / ".config/quickshell/caelestia"          # symlink farm the shell runs from
+UPSTREAM = Path("/etc/xdg/quickshell/caelestia")        # caelestia-shell package files
+CONFIG = HOME / ".config/caelestia"
+PALETTE = CONFIG / "palette"                            # unresolved: qs keys instances by path
+STATE = Path(os.environ.get("XDG_STATE_HOME", HOME / ".local/state")) / "caelestia"
+CACHE = Path(os.environ.get("XDG_CACHE_HOME", HOME / ".cache"))
+PACKAGES = ["caelestia-shell", "caelestia-cli", "hyprland", "noctalia-qs", "qt6-declarative", "qt6-base"]
+DOTFILES = Path(__file__).resolve().parent.parent       # ~/dotfiles/caelestia
+FORKS = DOTFILES / "quickshell"                         # forked QML, overlaid on the farm
+BASE = DOTFILES / "quickshell-base"                     # upstream originals behind each fork
+
+PASS, WARN, FAIL, SKIP = "pass", "warn", "fail", "skip"
+ICONS = {PASS: "✔", WARN: "⚠", FAIL: "✖", SKIP: "·"}
+COLOURS = {PASS: "32", WARN: "33", FAIL: "31", SKIP: "90"}
+
+
+class Report:
+    def __init__(self):
+        self.findings = []
+
+    def add(self, check, status, message, fix=None, detail=None):
+        self.findings.append(dict(check=check, status=status, message=message, fix=fix, detail=detail))
+
+    def worst(self):
+        statuses = {f["status"] for f in self.findings}
+        return FAIL if FAIL in statuses else WARN if WARN in statuses else PASS
+
+    def counts(self):
+        return {s: sum(f["status"] == s for f in self.findings) for s in (PASS, WARN, FAIL, SKIP)}
+
+
+def run(args, timeout=20, **kwargs):
+    """Run a command; never raises for a missing binary or a timeout."""
+    try:
+        return subprocess.run(args, capture_output=True, text=True, timeout=timeout, **kwargs)
+    except FileNotFoundError:
+        return subprocess.CompletedProcess(args, 127, "", f"{args[0]}: not found")
+    except subprocess.TimeoutExpired as expired:  # keep what it printed before hanging
+        decode = lambda b: b.decode(errors="replace") if isinstance(b, bytes) else (b or "")
+        return subprocess.CompletedProcess(args, 124, decode(expired.stdout),
+                                           decode(expired.stderr) + f"\n{args[0]}: timed out after {timeout}s")
+
+
+def sha256(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def package_versions():
+    result = run(["pacman", "-Q", *PACKAGES])
+    versions = {}
+    for line in result.stdout.splitlines():
+        name, _, version = line.partition(" ")
+        versions[name] = version
+    return versions
+
+
+# ── Symlink farm ──
+
+def farm_problems(farm, upstream, forks):
+    """Compare the farm with the package tree. Pure: paths in, findings out.
+
+    missing:  upstream files with no entry in the farm (a new package file → "X is not a type")
+    dangling: farm links whose target is gone (usually a file upstream removed)
+    foreign:  farm entries that are neither a link into the package nor a known fork
+    """
+    upstream_files = {p.relative_to(upstream) for p in upstream.rglob("*") if p.is_file()}
+    fork_files = {p.relative_to(forks) for p in forks.rglob("*") if p.is_file()} if forks.is_dir() else set()
+    missing, dangling, foreign = [], [], []
+    for rel in sorted(upstream_files):
+        if not os.path.lexists(farm / rel):
+            missing.append(rel)
+    for entry in sorted(farm.rglob("*")):
+        rel = entry.relative_to(farm)
+        if entry.is_symlink():
+            target = Path(os.readlink(entry))
+            if not entry.exists():
+                dangling.append(rel)
+            elif rel in fork_files:
+                continue
+            elif not str(target).startswith(str(upstream)):
+                foreign.append(rel)
+        elif entry.is_file() and rel not in fork_files and not entry.name.endswith(".pre-dotfiles"):
+            foreign.append(rel)
+    return missing, dangling, foreign
+
+
+def check_farm(report, fix):
+    if not UPSTREAM.is_dir():
+        report.add("farm", FAIL, f"{UPSTREAM} is missing — is caelestia-shell installed?")
+        return
+    if not FARM.is_dir():
+        report.add("farm", FAIL, f"{FARM} is missing; the shell has nothing to run.", fix="caelestia install")
+        return
+    missing, dangling, foreign = farm_problems(FARM, UPSTREAM, FORKS)
+    repaired = bool(fix and (missing or dangling))
+    if missing and fix:
+        for rel in missing:
+            (FARM / rel).parent.mkdir(parents=True, exist_ok=True)
+            (FARM / rel).symlink_to(UPSTREAM / rel)
+        report.add("farm", PASS, f"Linked {len(missing)} new upstream file(s) into the farm.",
+                   detail=[str(r) for r in missing])
+        missing = []
+    if dangling and fix:
+        removable = [r for r in dangling if str(os.readlink(FARM / r)).startswith(str(UPSTREAM))]
+        for rel in removable:
+            (FARM / rel).unlink()
+        if removable:
+            report.add("farm", PASS, f"Removed {len(removable)} link(s) to files upstream deleted.",
+                       detail=[str(r) for r in removable])
+        dangling = [r for r in dangling if r not in removable]
+    if missing:
+        report.add("farm", FAIL, f"{len(missing)} upstream file(s) have no link in the farm — the shell "
+                   "will fail with \"X is not a type\" on its next start.",
+                   fix="caelestia-doctor --fix", detail=[str(r) for r in missing])
+    if dangling:
+        report.add("farm", WARN, f"{len(dangling)} dangling link(s) in the farm.",
+                   fix="caelestia-doctor --fix" if fix is False else "remove by hand (not package links)",
+                   detail=[str(r) for r in dangling])
+    if foreign:
+        report.add("farm", WARN, f"{len(foreign)} farm entr(y/ies) are neither package links nor tracked forks.",
+                   fix=f"move real edits into {FORKS} and re-run the caelestia install step",
+                   detail=[str(r) for r in foreign])
+    if not (missing or dangling or foreign or repaired):
+        report.add("farm", PASS, "Symlink farm matches the installed caelestia-shell.")
+
+
+# ── Forked QML vs upstream ──
+
+def base_manifest():
+    try:
+        return json.loads((BASE / "manifest.json").read_text())
+    except (OSError, ValueError):
+        return None
+
+
+def fork_drift(forks, upstream, base, manifest):
+    """Per fork: has upstream changed since the recorded base? Pure."""
+    rows = []
+    for fork in sorted(p for p in forks.rglob("*") if p.is_file()):
+        rel = fork.relative_to(forks)
+        recorded = (manifest or {}).get("files", {}).get(str(rel))
+        current = upstream / rel
+        if not current.is_file():
+            state = "upstream-only-fork" if recorded is None else "upstream-deleted"
+        elif recorded is None:
+            state = "no-base"
+        elif sha256(current) != recorded:
+            state = "upstream-changed"
+        else:
+            state = "current"
+        rows.append((rel, state))
+    return rows
+
+
+def check_forks(report):
+    if not FORKS.is_dir():
+        report.add("forks", SKIP, "No forked QML in the dotfiles.")
+        return
+    manifest = base_manifest()
+    rows = fork_drift(FORKS, UPSTREAM, BASE, manifest)
+    changed = [r for r, s in rows if s == "upstream-changed"]
+    deleted = [r for r, s in rows if s == "upstream-deleted"]
+    unknown = [r for r, s in rows if s == "no-base"]
+    own = [r for r, s in rows if s == "upstream-only-fork"]
+    if changed:
+        report.add("forks", WARN, f"Upstream changed {len(changed)} file(s) you forked; your copies still run the old code.",
+                   fix="review: diff -u " + str(BASE / "files" / "<file>") + " " + str(UPSTREAM / "<file>")
+                       + " ; merge into " + str(FORKS / "<file>") + " ; then caelestia-doctor --accept-upstream <file>",
+                   detail=[str(r) for r in changed])
+    if deleted:
+        report.add("forks", WARN, f"Upstream deleted {len(deleted)} file(s) you forked.",
+                   detail=[str(r) for r in deleted])
+    if unknown:
+        report.add("forks", WARN, f"{len(unknown)} fork(s) have no recorded upstream base, so drift can't be detected.",
+                   fix="caelestia-doctor --accept-upstream " + " ".join(str(r) for r in unknown),
+                   detail=[str(r) for r in unknown])
+    if not (changed or deleted or unknown):
+        since = (manifest or {}).get("caelestia-shell", "?")
+        mine = f" (+{len(own)} of your own with no upstream counterpart)" if own else ""
+        report.add("forks", PASS, f"{len(rows) - len(own)} forked file(s) match their upstream base "
+                   f"(caelestia-shell {since}){mine}.")
+
+
+def accept_upstream(names):
+    """Record current upstream copies of forked files as their base."""
+    manifest = base_manifest() or {"files": {}}
+    forks = sorted(p.relative_to(FORKS) for p in FORKS.rglob("*") if p.is_file())
+    chosen = forks if not names else [Path(n) for n in names]
+    for rel in chosen:
+        if rel not in forks:
+            raise SystemExit(f"Not a forked file: {rel}")
+        current = UPSTREAM / rel
+        if not current.is_file():
+            manifest["files"].pop(str(rel), None)
+            (BASE / "files" / rel).unlink(missing_ok=True)
+            print(f"  {rel}: upstream has no such file; base cleared")
+            continue
+        (BASE / "files" / rel).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(current, BASE / "files" / rel)
+        manifest["files"][str(rel)] = sha256(current)
+        print(f"  {rel}: base = upstream {sha256(current)[:12]}")
+    manifest["caelestia-shell"] = package_versions().get("caelestia-shell", "?")
+    manifest["recorded"] = time.strftime("%Y-%m-%d")
+    (BASE / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+
+
+# ── Processes ──
+
+def process_start(pid):
+    """Process start as a Unix timestamp (from /proc)."""
+    ticks = int(Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[19])
+    boot = next(int(line.split()[1]) for line in Path("/proc/stat").read_text().splitlines() if line.startswith("btime"))
+    return boot + ticks / os.sysconf("SC_CLK_TCK")
+
+
+def qs_instances(match):
+    """PIDs of `qs` processes whose argv contains every string in match."""
+    pids = []
+    for proc in Path("/proc").glob("[0-9]*"):
+        try:
+            argv = (proc / "cmdline").read_bytes().split(b"\0")
+        except OSError:
+            continue
+        args = [a.decode(errors="replace") for a in argv if a]
+        if args and os.path.basename(args[0]) == "qs" and all(m in args for m in match):
+            pids.append(int(proc.name))
+    return pids
+
+
+def package_installed_at(name):
+    for desc in Path("/var/lib/pacman/local").glob(f"{name}-[0-9]*/desc"):
+        lines = desc.read_text().splitlines()
+        if "%INSTALLDATE%" in lines:
+            return int(lines[lines.index("%INSTALLDATE%") + 1])
+    return None
+
+
+def check_shell(report):
+    pids = qs_instances(["-c", "caelestia"])
+    if not pids:
+        report.add("shell", FAIL, "The Caelestia shell is not running.", fix="caelestia shell -d")
+        return
+    if len(pids) > 1:
+        report.add("shell", WARN, f"{len(pids)} Caelestia shell instances are running (duplicate bars).",
+                   fix="qs -c caelestia kill; caelestia shell -d")
+    log = run(["qs", "log", "-c", "caelestia"], timeout=8).stdout
+    errors = [line.strip() for line in log.splitlines()
+              if re.search(r"\bERROR\b|is not a type|unavailable", line)]
+    if errors:
+        report.add("shell", FAIL, f"The running shell logged {len(errors)} error(s).",
+                   fix="qs log -c caelestia", detail=errors[:8])
+    # The forked shell.qml disables file watching: a running shell proves nothing about
+    # files changed after it started.
+    started = min(process_start(p) for p in pids)
+    installed = package_installed_at("caelestia-shell")
+    newer_forks = [p for p in FORKS.rglob("*") if p.is_file() and p.stat().st_mtime > started] if FORKS.is_dir() else []
+    if installed and installed > started:
+        report.add("shell", WARN, "caelestia-shell was upgraded after the shell started; it still runs the old code.",
+                   fix="qs -c caelestia kill; caelestia shell -d   (then re-run caelestia-doctor)")
+    elif newer_forks:
+        report.add("shell", WARN, f"{len(newer_forks)} forked file(s) changed after the shell started.",
+                   fix="qs -c caelestia kill; caelestia shell -d")
+    elif not errors:
+        report.add("shell", PASS, f"Shell running (pid {pids[0]}), loaded cleanly, up to date with its files.")
+
+
+# ── Palette ──
+
+TOKEN_PATH = re.compile(r"\bTokens\.((?:[A-Za-z_]\w*)(?:\.[A-Za-z_]\w*)*)")
+
+
+def token_paths(qml):
+    """Every Tokens.a.b.c path a QML file reads (method calls excluded). Pure."""
+    paths = set()
+    for match in TOKEN_PATH.finditer(qml):
+        end = match.end()
+        if end < len(qml) and qml[end] == "(":
+            continue
+        paths.add(match.group(1))
+    return sorted(paths)
+
+
+PROBE = """import QtQuick
+import Quickshell
+import Caelestia.Config
+ShellRoot {
+    Component.onCompleted: {
+        const paths = %(paths)s;
+        const missing = paths.filter(path => {
+            let value = Tokens;
+            for (const key of path.split(".")) {
+                if (value === undefined || value === null) return true;
+                value = value[key];
+            }
+            return value === undefined || value === null;
+        });
+        console.log("DOCTOR-TOKENS " + JSON.stringify(missing));
+        const component = Qt.createComponent(%(palette)s);
+        console.log("DOCTOR-COMPILE " + JSON.stringify({ready: component.status === Component.Ready, error: component.errorString()}));
+        quitter.start();  // Qt.quit() here would fire before Quickshell listens for it
+    }
+    Timer { id: quitter; interval: 1; onTriggered: Qt.quit() }
+}
+"""
+
+
+def check_palette(report, fix):
+    source = PALETTE / "shell.qml"
+    if not source.exists():
+        report.add("palette", FAIL, f"{source} is missing.", fix="cd ~/dotfiles && ./install.sh --only caelestia")
+        return
+    paths = token_paths(source.read_text())
+    with tempfile.TemporaryDirectory(prefix="caelestia-doctor-") as probe:
+        Path(probe, "shell.qml").write_text(PROBE % {"paths": json.dumps(paths), "palette": json.dumps(source.as_uri())})
+        out = run(["qs", "-p", probe, "--no-color"], timeout=20)
+    text = out.stdout + out.stderr
+    tokens = re.search(r"DOCTOR-TOKENS (\[.*\])", text)
+    compiled = re.search(r"DOCTOR-COMPILE (\{.*\})", text)
+    if not tokens or not compiled:
+        report.add("palette", FAIL, "Could not load Caelestia.Config in a probe — Quickshell or the Caelestia plugin is broken.",
+                   detail=[l for l in text.splitlines() if "ERROR" in l][:5] or text.splitlines()[-5:])
+        return
+    missing = json.loads(tokens.group(1))
+    result = json.loads(compiled.group(1))
+    if missing:
+        report.add("palette", FAIL, f"Caelestia renamed or removed {len(missing)} design token(s) the palette uses.",
+                   fix="update the Tokens.* references in palette/shell.qml", detail=missing)
+    if not result["ready"]:
+        report.add("palette", FAIL, "palette/shell.qml no longer compiles.", detail=result["error"].strip().splitlines()[:6])
+    if not missing and result["ready"]:
+        report.add("palette", PASS, f"Palette compiles; all {len(paths)} design tokens it uses exist.")
+
+    pids = qs_instances(["-p", str(PALETTE)])
+    if not pids:
+        if fix:
+            run([str(HOME / ".local/bin/caelestia-palette"), "start"])
+            report.add("palette", PASS, "Started the resident palette.")
+        else:
+            report.add("palette", WARN, "The resident palette isn't running (Super+K will cold-start it, ~0.4 s).",
+                       fix="caelestia-palette start")
+        return
+    newest = max(p.stat().st_mtime for p in PALETTE.iterdir() if p.suffix in (".qml", ".js") and p.exists())
+    if newest > process_start(pids[0]):
+        if fix:
+            run([str(HOME / ".local/bin/caelestia-palette"), "restart"])
+            report.add("palette", PASS, "Restarted the resident palette onto its current files.")
+        else:
+            report.add("palette", WARN, "The resident palette is running older code than its files (it doesn't hot-reload through symlinks).",
+                       fix="caelestia-palette restart")
+        return
+    state = run(["qs", "-p", str(PALETTE), "ipc", "call", "palette", "state"], timeout=5)
+    try:
+        error = json.loads(state.stdout).get("error")
+    except ValueError:
+        error = "no reply over IPC"
+    if error:
+        report.add("palette", WARN, f"The resident palette reports: {error}", fix="caelestia-palette restart")
+    else:
+        report.add("palette", PASS, "Resident palette running on current files.")
+
+
+# ── Hyprland ──
+
+def check_hyprland(report):
+    errors = run(["hyprctl", "configerrors"]).stdout.strip()
+    if errors and errors.lower() != "no errors":
+        report.add("hyprland", FAIL, "Hyprland reports config errors.", fix="hyprctl configerrors", detail=errors.splitlines()[:8])
+    luac = shutil.which("luac")
+    bad = []
+    for path in (CONFIG / "hypr-vars.lua", CONFIG / "hypr-user.lua", CONFIG / "scripts/palette-vars.lua"):
+        if luac and path.exists():
+            result = run([luac, "-p", str(path)])
+            if result.returncode:
+                bad.append(result.stderr.strip())
+    if bad:
+        report.add("hyprland", FAIL, "Lua syntax errors.", detail=bad)
+    try:
+        actions = json.loads((CONFIG / "actions.json").read_text())
+    except (OSError, ValueError) as error:
+        report.add("hyprland", FAIL, f"actions.json is unreadable: {error}")
+        return
+    live = run(["hyprctl", "-j", "binds"])
+    try:
+        binds = json.loads(live.stdout)
+    except ValueError:
+        report.add("hyprland", SKIP, "Hyprland isn't answering (not in a Hyprland session?).")
+        return
+    bits = {"super": 64, "ctrl": 4, "control": 4, "alt": 8, "shift": 1}
+    chord = lambda key: (sum(bits.get(p.strip().lower(), 0) for p in key.split("+")[:-1]), key.split("+")[-1].strip().lower())
+    bound = {(b["modmask"], b["key"].lower()) for b in binds}
+    unbound = [f"{a['label']} ({k})" for a in actions for k in a.get("keys", []) if chord(k) not in bound]
+    if unbound:
+        report.add("hyprland", WARN, f"{len(unbound)} shortcut(s) from actions.json aren't bound.",
+                   fix="hyprctl reload", detail=unbound)
+    if not (errors and errors.lower() != "no errors") and not bad and not unbound:
+        report.add("hyprland", PASS, f"No config errors; all {sum(len(a.get('keys', [])) for a in actions)} custom shortcuts bound.")
+
+
+# ── Tests, dependencies, tree-sitter ──
+
+def check_tests(report):
+    failures = []
+    node = shutil.which("node")
+    test = CONFIG / "palette/test_palette.mjs"
+    if node and test.exists():
+        result = run([node, "--test", str(test)], timeout=60)
+        if result.returncode:
+            failures.append("palette: " + (re.findall(r"^✖ .*", result.stdout, re.M) or ["see node --test output"])[0])
+    py = run([sys.executable, "-m", "unittest", "-q", "test_workflows"], timeout=60, cwd=CONFIG / "scripts")
+    if py.returncode:
+        failures.append("workflows: " + (py.stderr.strip().splitlines() or ["failed"])[-1])
+    if failures:
+        report.add("tests", FAIL, "Tests failed.", fix=f"node --test {test}; (cd {CONFIG / 'scripts'} && python3 -m unittest)", detail=failures)
+    else:
+        report.add("tests", PASS, "Palette and notes-workflow tests pass." + ("" if node else " (palette tests skipped: no node)"))
+
+
+DEPENDENCIES = {
+    "palette": ["qs", "hyprctl", "lua", "find"],
+    "notes": ["fuzzel", "ghostty", str(HOME / ".local/bin/nvim"), "rnote", "rnote-cli"],
+    "OCR": ["slurp", "grim", "tesseract", "wl-copy", str(HOME / ".local/share/tessdata/eng.traineddata")],
+    "project picker": [str(HOME / ".local/bin/tmux-revive")],
+}
+
+
+def check_dependencies(report):
+    missing = []
+    for feature, needs in DEPENDENCIES.items():
+        gone = [n for n in needs if not (Path(n).exists() if n.startswith("/") else shutil.which(n))]
+        if gone:
+            missing.append(f"{feature}: " + ", ".join(gone))
+    dead = [str(p) for d in (CONFIG, HOME / ".local/bin") for p in d.rglob("*") if p.is_symlink() and not p.exists()
+            and "backups" not in p.parts]
+    if missing:
+        report.add("deps", WARN, "Some workflows are missing tools.", detail=missing)
+    if dead:
+        report.add("deps", WARN, f"{len(dead)} dangling link(s) in your config.", fix="cd ~/dotfiles && ./install.sh --only caelestia", detail=dead)
+    if not (missing or dead):
+        report.add("deps", PASS, "Every workflow's tools are installed; no dangling links.")
+
+
+def check_treesitter(report, fix):
+    lock_dir = CACHE / "tree-sitter/lock"
+    locks = sorted(lock_dir.glob("*.lock")) if lock_dir.is_dir() else []
+    if not locks:
+        report.add("tree-sitter", PASS, "No tree-sitter build locks.")
+        return
+    building = any(run(["pgrep", "-x", name]).returncode == 0 for name in ("tree-sitter", "cc", "gcc", "clang"))
+    stale = [l for l in locks if time.time() - l.stat().st_mtime > 3600]
+    if building or not stale:
+        report.add("tree-sitter", SKIP, f"{len(locks)} lock(s), but a parser build may be running; left alone.")
+        return
+    if fix:
+        for lock in stale:
+            lock.unlink()
+        report.add("tree-sitter", PASS, f"Removed {len(stale)} stale tree-sitter lock(s); Neovim can build parsers again.",
+                   detail=[l.name for l in stale])
+    else:
+        report.add("tree-sitter", WARN, f"{len(stale)} stale tree-sitter lock(s) make Neovim retry and fail parser builds.",
+                   fix="caelestia-doctor --fix", detail=[l.name for l in stale])
+
+
+# ── Output ──
+
+def print_report(report, colour):
+    paint = (lambda s, text: f"\033[{COLOURS[s]}m{text}\033[0m") if colour else (lambda s, text: text)
+    print()
+    for f in report.findings:
+        print(f"  {paint(f['status'], ICONS[f['status']])} {f['check']:<12} {f['message']}")
+        for line in (f["detail"] or [])[:12] if isinstance(f["detail"], list) else [f["detail"]] if f["detail"] else []:
+            print(f"  {'':<15}{paint(SKIP, '· ' + str(line))}")
+        if f["fix"] and f["status"] in (WARN, FAIL):
+            print(f"  {'':<15}→ {f['fix']}")
+    counts = report.counts()
+    worst = report.worst()
+    print("\n  " + paint(worst, {PASS: "Healthy.", WARN: "Healthy, with warnings.", FAIL: "Problems found."}[worst])
+          + f"  {counts[PASS]} ok · {counts[WARN]} warning(s) · {counts[FAIL]} failure(s)\n")
+
+
+def toast(report):
+    counts = report.counts()
+    level = "error" if counts[FAIL] else "warn"
+    message = f"{counts[FAIL]} failure(s), {counts[WARN]} warning(s). Run caelestia-doctor for details."
+    shown = run(["qs", "-c", "caelestia", "ipc", "call", "toaster", level, "Caelestia doctor", message, "health_and_safety"], timeout=5)
+    if shown.returncode:
+        run(["notify-send", "-a", "Caelestia doctor", "Caelestia doctor", message])
+
+
+def fingerprint():
+    data = dict(packages=package_versions(), base=(BASE / "manifest.json").read_text() if (BASE / "manifest.json").exists() else "")
+    return hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--fix", action="store_true", help="apply safe repairs")
+    parser.add_argument("--accept-upstream", nargs="*", metavar="FILE", help="record upstream as the base of forked files")
+    parser.add_argument("--json", action="store_true", help="print findings as JSON")
+    parser.add_argument("--login", action="store_true", help="quiet login check, only after version changes")
+    args = parser.parse_args()
+
+    if args.accept_upstream is not None:
+        accept_upstream(args.accept_upstream)
+        return 0
+
+    stamp = STATE / "doctor-last.json"
+    if args.login:
+        STATE.mkdir(parents=True, exist_ok=True)
+        lock = (STATE / "doctor.lock").open("w")
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return 0
+        try:
+            last = json.loads(stamp.read_text())
+        except (OSError, ValueError):
+            last = {}
+        if last.get("fingerprint") == fingerprint() and last.get("status") == PASS:
+            return 0
+
+    report = Report()
+    for check in (lambda: check_farm(report, args.fix), lambda: check_forks(report), lambda: check_shell(report),
+                  lambda: check_palette(report, args.fix), lambda: check_hyprland(report), lambda: check_tests(report),
+                  lambda: check_dependencies(report), lambda: check_treesitter(report, args.fix)):
+        try:
+            check()
+        except Exception as error:  # one broken check must not hide the others
+            report.add("doctor", FAIL, f"A check crashed: {type(error).__name__}: {error}")
+
+    worst = report.worst()
+    if args.login:
+        stamp.write_text(json.dumps(dict(fingerprint=fingerprint(), status=worst, when=time.strftime("%Y-%m-%d %H:%M"),
+                                         counts=report.counts())))
+        if worst != PASS:
+            toast(report)
+    elif args.json:
+        print(json.dumps(dict(status=worst, findings=report.findings), indent=2, default=str))
+    else:
+        print_report(report, sys.stdout.isatty())
+    return {PASS: 0, WARN: 1, FAIL: 2}[worst]
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        sys.exit(130)
+    except Exception as error:
+        print(f"caelestia-doctor failed: {error}", file=sys.stderr)
+        sys.exit(3)
