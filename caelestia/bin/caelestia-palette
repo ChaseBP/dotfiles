@@ -41,6 +41,10 @@ case $command in
     show)   ipc showView "$view" || launch "$view" ;;
     hide)        ipc close || true ;;
     start)       ipc state || launch ;;
-    restart)     qs -p "$PALETTE" kill >/dev/null 2>&1; sleep 0.2; launch ;;
+    restart)
+        qs -p "$PALETTE" kill >/dev/null 2>&1
+        # -n refuses to start while the old instance is still exiting: wait it out.
+        for _ in $(seq 100); do ipc state || break; sleep 0.03; done
+        launch ;;
     *)           sed -n '7,11p' "$0" >&2; exit 2 ;;
 esac

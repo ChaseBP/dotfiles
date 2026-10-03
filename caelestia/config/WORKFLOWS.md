@@ -29,6 +29,8 @@ shortcut, category, or synonym (for example `scan`, `ocr`, `clipboard`, or
 actions are grouped into choosers; searching a number finds individual actions.
 
 - Arrow keys select results; Enter runs or opens the selected item.
+- Ctrl+Tab / Ctrl+Shift+Tab step through the category chips. Chips come from
+  the catalog itself, so Mouse, Gestures, Hardware and any new category appear.
 - Ctrl+I or **Details** explains the action and shows its shortcuts.
 - Escape / Alt+Left go back, preserving the previous query, selection and scroll.
 - Escape on the home view, **Close**, clicking outside, or Super+K dismisses it.
@@ -58,11 +60,15 @@ The panel needs no compositor reload after wallpaper changes.
 
 Choose **Search saved notes** to search filenames and text under
 `~/Documents/Notes` (`.md`, `.markdown`, `.txt`, `.org`). Each file appears once,
-with a highlighted context preview and matching-line count. Enter opens the
-first matched line in a read-only Neovim window in the notes workspace; close
-it with `:q`. Ctrl+E (or **Edit**) opens it for editing instead, reusing a
-window that already shows that note. A filename-only match opens line 1.
-**New note** creates one; **Refresh** reloads the index.
+with a highlighted context preview and matching-line count; with no query the
+most recently edited notes come first. Words the filename already contains
+needn't recur in the text ("signals fourier" finds `Signals.md` wherever it
+mentions Fourier). Enter opens the first matched line in a read-only Neovim
+window in the notes workspace; close it with `:q`. Ctrl+E (or **Edit**) opens
+it for editing instead and closes that note's read-only view. Opening a note
+that already has a window reuses it and jumps to the line (each note's Neovim
+listens on a socket in `$XDG_RUNTIME_DIR`). **New note** creates one;
+**Refresh** reloads the index.
 Narrow panels place the preview beneath the results.
 
 Search excludes Rnote handwriting, hidden files and folders, and symlinks. Limits are 2 MB per file, 500 files, and 20 MB total; omissions caused by

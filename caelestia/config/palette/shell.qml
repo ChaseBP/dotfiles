@@ -52,7 +52,8 @@ ShellRoot {
     readonly property var groupIcons: ({
         "All": "apps", "Your workflows": "bolt", "Windows": "select_window", "Workspaces": "grid_view",
         "Apps": "widgets", "Capture": "screenshot_region", "Clipboard": "content_paste", "Media": "music_note",
-        "Desktop": "desktop_windows", "System": "settings_power", "Guides": "menu_book"
+        "Desktop": "desktop_windows", "System": "settings_power", "Guides": "menu_book",
+        "Mouse": "mouse", "Gestures": "swipe", "Hardware": "devices", "Other": "help"
     })
     readonly property var idIcons: ({
         "notes": "edit_note", "notes-choose": "stylus_note", "windows": "search", "ocr": "document_scanner",
@@ -307,10 +308,11 @@ ShellRoot {
         if (indexing) return;
         indexing = true;
         const target = engine;
-        run(["find", notesRoot, "-mindepth", "1", "-name", ".*", "-prune", "-o", "-type", "f", "-printf", "%s\t%P\n"], (code, out) => {
+        run(["find", notesRoot, "-mindepth", "1", "-name", ".*", "-prune", "-o", "-type", "f", "-printf", "%s\t%T@\t%P\n"], (code, out) => {
             const files = out.split("\n").filter(Boolean).map(line => {
-                const tab = line.indexOf("\t");
-                return {size: Number(line.slice(0, tab)), path: line.slice(tab + 1)};
+                const [size, mtime] = line.split("\t", 2);
+                const path = line.slice(size.length + mtime.length + 2);
+                return {size: Number(size), mtime: Math.round(Number(mtime) * 1000), path};
             });
             const selection = Engine.selectNoteFiles(files);
             const notes = [];
@@ -318,7 +320,7 @@ ShellRoot {
             for (const f of selection.accepted) {
                 const text = readFile(notesRoot + "/" + f.path);
                 if (text === null) skipped++;
-                else notes.push({path: f.path, text});
+                else notes.push({path: f.path, text, mtime: f.mtime});
             }
             indexing = false;
             if (engine !== target) {  // the model was rebuilt meanwhile; index for the new one
@@ -364,20 +366,13 @@ ShellRoot {
         };
         const finish = () => { if (opening === session) close(); };
         const remember = () => { if (plan.recent) recentFile.setText(JSON.stringify(plan.recent)); };
-        if (plan.type === "note" && plan.edit) {
-            // workflows.py owns editable notes: autosave, reuse, notes workspace.
-            Quickshell.execDetached(["python3", base + "/scripts/workflows.py", "notes-open", notesRoot + "/" + plan.path, String(plan.line)]);
-            finish();
-            return;
-        }
         if (plan.type === "note") {
-            const path = notesRoot + "/" + plan.path;
-            run(["find", path, "-maxdepth", "0", "-type", "f"], (code, out) => {
-                if (code !== 0 || !out.trim()) return fail("This note moved or is no longer available.");
-                Quickshell.execDetached(["ghostty", "--class=local.caelestia.note-search", "--title=Note reference", "-e",
-                                         home + "/.local/bin/nvim", "-R", "-n", "+" + plan.line, "--", path]);
-                finish();
-            });
+            // workflows.py owns every note window: it validates the path, reuses an
+            // open view or editor and jumps it to the line (Neovim sockets), autosaves
+            // edits, and keeps them in the notes workspace. It toasts its own errors.
+            Quickshell.execDetached(["python3", base + "/scripts/workflows.py", plan.edit ? "notes-open" : "notes-view",
+                                     notesRoot + "/" + plan.path, String(plan.line)]);
+            finish();
             return;
         }
         const workflow = () => {
@@ -780,6 +775,16 @@ ShellRoot {
                     }
                     onTextEdited: queryTimer.restart()
                     Keys.onPressed: event => {
+                        // Ctrl+Tab / Ctrl+Shift+Tab: next/previous category chip.
+                        if ((event.key === Qt.Key_Tab || event.key === Qt.Key_Backtab) && (event.modifiers & Qt.ControlModifier)
+                                && root.page.view === "commands") {
+                            const cats = root.page.categories || root.categories;
+                            const current = Math.max(0, cats.indexOf(root.page.category === "Browse all" ? "All" : root.page.category));
+                            const step = event.key === Qt.Key_Backtab || (event.modifiers & Qt.ShiftModifier) ? -1 : 1;
+                            root.send({op: "query", query: search.text, category: cats[(current + step + cats.length) % cats.length]});
+                            event.accepted = true;
+                            return;
+                        }
                         if (event.key === Qt.Key_Down || event.key === Qt.Key_Up) { root.selectStep(event.key === Qt.Key_Down ? 1 : -1); event.accepted = true; }
                         else if (event.key === Qt.Key_PageDown || event.key === Qt.Key_PageUp) { root.selectStep(event.key === Qt.Key_PageDown ? 6 : -6); event.accepted = true; }
                         else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
@@ -829,7 +834,7 @@ ShellRoot {
                         id: chips
                         spacing: Tokens.spacing.small
                         Repeater {
-                            model: root.categories
+                            model: root.page.categories || root.categories
                             Chip {
                                 required property string modelData
                                 text: modelData

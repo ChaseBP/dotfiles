@@ -316,6 +316,31 @@ function buildCatalog(vars, binds, actions) {
     return result;
 }
 
+// Filter chips: the catalog's own groups, in a stable order, so a new category
+// (say, upstream's "Utilities: …" bind descriptions) gets a chip automatically.
+const CATEGORY_ORDER = ['Your workflows', 'Windows', 'Workspaces', 'Apps', 'Capture', 'Clipboard', 'Media', 'Desktop', 'System'];
+
+function categoriesOf(entries) {
+    const groups = new Set(entries.map(e => e.group).filter(Boolean));
+    const known = CATEGORY_ORDER.filter(g => groups.has(g));
+    const others = Array.from(groups).filter(g => !CATEGORY_ORDER.includes(g) && g !== 'Other').sort(compareText);
+    return ['All'].concat(known, others, groups.has('Other') ? ['Other'] : [], ['Guides']);
+}
+
+// "just now", "5 min ago", "3 h ago", "yesterday", "4 days ago", or a date.
+function relativeTime(ms, now) {
+    const minutes = Math.floor((now - ms) / 60000);
+    if (minutes < 1) return 'just now';
+    if (minutes < 60) return minutes + ' min ago';
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return hours + ' h ago';
+    const days = Math.floor(hours / 24);
+    if (days === 1) return 'yesterday';
+    if (days < 7) return days + ' days ago';
+    const d = new Date(ms);  // local date, not UTC
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+
 // ── Notes ──
 
 // files: [{path (relative), size}] from `find`. Mirrors the indexing limits.
@@ -361,6 +386,8 @@ class Model {
         this.active = env.active || {};
         this.clients = env.clients || [];
         this.recent = (env.recent || []).filter(x => typeof x === 'string').slice(0, 5);
+        this.now = env.now || Date.now();
+        this.categories = categoriesOf(this.entries);
         this.notes = null;
         this.noteWarning = '';
         if (env.notes) this.setNotes(env.notes.files, env.notes.skipped);
@@ -376,7 +403,7 @@ class Model {
     get needsNotes() { return this.state.view === 'notes' && this.notes === null; }
 
     setNotes(files, skipped) {
-        this.notes = files.map(f => ({path: f.path, name: f.path, lines: splitLines(f.text)}));
+        this.notes = files.map(f => ({path: f.path, name: f.path, lines: splitLines(f.text), mtime: f.mtime || 0}));
         this.noteWarning = skipped ? `${skipped} files omitted because of size, access, or indexing limits.` : '';
     }
 
@@ -450,26 +477,34 @@ class Model {
         const terms = normalized(q).split(' ').filter(Boolean);
         const results = [];
         this.notes.forEach((note, i) => {
-            const nameMatch = terms.every(t => normalized(note.name).includes(t));
+            // Terms the filename already covers needn't recur in the text, so
+            // "signals fourier" finds Signals.md wherever a line mentions Fourier.
+            const name = normalized(note.name);
+            const rest = terms.filter(t => !name.includes(t));
             const hits = [];
-            if (terms.length)
-                note.lines.forEach((line, j) => { if (terms.every(t => normalized(line).includes(t))) hits.push(j); });
-            if (terms.length && !nameMatch && !hits.length)
+            if (rest.length)
+                note.lines.forEach((line, j) => { if (rest.every(t => normalized(line).includes(t))) hits.push(j); });
+            if (rest.length && !hits.length)
                 return;
             const line = hits.length ? hits[0] : 0;
             const excerpt = note.lines.slice(Math.max(0, line - 1), line + 3).join('\n').slice(0, 1800);
             results.push({
                 id: `note:${i}:${line + 1}`, title: note.name, titleHtml: marked(note.name, q),
-                subtitle: terms.length ? `${hits.length} matching lines · line ${line + 1}` : 'Read-only reference',
-                key: '', section: 'Notes', kind: 'note', disabled: false, badge: 'Open',
+                subtitle: !terms.length ? (note.mtime ? 'Edited ' + relativeTime(note.mtime, this.now) : 'Read-only reference')
+                    : hits.length ? `${hits.length} matching ${hits.length === 1 ? 'line' : 'lines'} · line ${line + 1}`
+                    : 'Filename match',
+                key: '', section: terms.length ? 'Notes' : 'Recently edited', kind: 'note', disabled: false, badge: 'Open',
                 preview: marked(excerpt || 'Empty note', q).replace(/\n/g, '<br>'), previewPlain: excerpt,
                 hits: hits.slice(0, 100).map(j => j + 1), detail: `Enter opens line ${line + 1} read-only; Ctrl+E edits it.`,
+                mtime: note.mtime || 0,
             });
         });
         const nq = normalized(q);
         const inTitle = r => normalized(r.title).includes(nq) ? 0 : 1;
         const order = new Map(results.map((r, i) => [r, i]));
-        return results.sort((a, b) => inTitle(a) - inTitle(b) || compareText(a.title, b.title) || order.get(a) - order.get(b));
+        // No query: most recently edited first. A query: title matches first, then recency.
+        return results.sort((a, b) => (terms.length ? inTitle(a) - inTitle(b) : 0) || b.mtime - a.mtime
+            || compareText(a.title, b.title) || order.get(a) - order.get(b));
     }
 
     detail(ident) {
@@ -506,7 +541,7 @@ class Model {
         return {
             kind: 'state', view,
             title: {commands: 'Commands', notes: 'Search notes', details: 'Shortcut details', confirm: 'Confirm action', family: 'Choose workspace'}[view],
-            query: this.state.query, category: this.state.category, rows,
+            query: this.state.query, category: this.state.category, rows, categories: this.categories,
             detail: view === 'details' || view === 'confirm' ? this.detail(this.state.entry || '') : {},
             selected: this.state.selected || '', scroll: this.state.scroll || 0,
             back: this.stack.length > 0, message: this.message, notice,

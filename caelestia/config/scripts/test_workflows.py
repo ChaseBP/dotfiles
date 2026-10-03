@@ -94,25 +94,62 @@ class NotesTests(unittest.TestCase):
                 w.notes_open(str(bad), "1")
             edit.assert_not_called()
 
-    def test_edit_reuses_the_window_already_showing_a_note(self):
+    def test_edit_reuses_the_window_already_showing_a_note_and_jumps(self):
         note = self.root / "a.md"
         note.write_text("x")
         window = {"class": w.NOTE_CLASS, "title": "Note — a.md", "address": "0x1", "focusHistoryID": 0}
         with patch.object(w, "ipc", return_value=[window]), patch.object(w, "show_notes") as show, \
-                patch.object(w, "open_note_window") as spawn:
+                patch.object(w, "open_note_window") as spawn, patch.object(w, "nvim_send") as send:
             w.edit_note(note, line=3)
         show.assert_called_once_with(window)
         spawn.assert_not_called()
+        self.assertEqual(send.call_args_list[0].args, (w.note_socket(note.resolve(), "ro"), "<C-\\><C-N>:qa!<CR>"))
+        self.assertEqual(send.call_args_list[1].args, (w.note_socket(note.resolve(), "ed"), "<C-\\><C-N>:3<CR>zz"))
+
+    def test_view_reuses_an_open_read_only_view(self):
+        note = self.root / "a.md"
+        note.write_text("x\ny")
+        view = {"class": w.SEARCH_CLASS, "title": "Note reference — a.md", "address": "0x2", "focusHistoryID": 0}
+        with patch.object(w, "ipc", return_value=[view]), patch.object(w, "show_notes") as show, \
+                patch.object(w, "open_note_window") as spawn, patch.object(w, "nvim_send", return_value=True) as send:
+            w.notes_view(str(note), "2")
+        send.assert_called_once_with(w.note_socket(note.resolve(), "ro"), "<C-\\><C-N>:2<CR>zz")
+        show.assert_called_once_with(view)
+        spawn.assert_not_called()
+
+    def test_view_opens_read_only_listening_at_the_line(self):
+        note = self.root / "a.md"
+        note.write_text("x")
+        with patch.object(w, "ipc", return_value=[]), patch.object(w, "open_note_window") as spawn:
+            w.notes_view(str(note), "5")
+        args = spawn.call_args.args[0]
+        self.assertIn("--class=" + w.SEARCH_CLASS, args)
+        self.assertEqual(args[args.index("--listen") + 1], str(w.note_socket(note.resolve(), "ro")))
+        self.assertEqual(args[-4:], ["-c", "5", "--", str(note.resolve())])
+        self.assertIn("-R", args)
+        with self.assertRaises(ValueError):
+            w.notes_view(str(self.root / "missing.md"), "1")
+
+    def test_sockets_are_per_note_and_mode(self):
+        a, b = self.root / "a.md", self.root / "b.md"
+        self.assertNotEqual(w.note_socket(a, "ro"), w.note_socket(a, "ed"))
+        self.assertNotEqual(w.note_socket(a, "ed"), w.note_socket(b, "ed"))
+        self.assertTrue(w.note_socket(a, "ed").name.startswith("caelestia-note-ed-"))
+
+    def test_nvim_send_without_a_listener_is_a_no_op(self):
+        self.assertFalse(w.nvim_send(Path(self.temp.name) / "nobody.sock", ":q<CR>"))
 
     def test_inbox_edits_go_to_the_inbox_window(self):
         inbox = self.root / "Inbox.md"
         inbox.write_text("x")
-        with patch.object(w, "ipc", return_value=[]), patch.object(w, "open_note_window") as spawn:
+        with patch.object(w, "ipc", return_value=[]), patch.object(w, "open_note_window") as spawn, \
+                patch.object(w, "nvim_send"):
             w.edit_note(inbox, line=4)
         args = spawn.call_args.args[0]
         self.assertIn("--class=" + w.TYPED_CLASS, args)
         self.assertIn("--title=Typed notes", args)
-        self.assertEqual(args[-3:], ["+4", "--", str(inbox.resolve())])
+        self.assertEqual(args[args.index("--listen") + 1], str(w.note_socket(inbox.resolve(), "ed")))
+        self.assertEqual(args[-4:], ["-c", "4", "--", str(inbox.resolve())])
 
 
 if __name__ == "__main__":

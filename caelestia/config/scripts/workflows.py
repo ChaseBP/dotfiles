@@ -4,6 +4,7 @@ import fcntl
 import json
 import os
 from datetime import datetime
+import hashlib
 from pathlib import Path
 import re
 import subprocess
@@ -16,8 +17,11 @@ NOTES = HOME / "Documents" / "Notes"
 WORKSPACE = "special:todo"
 TYPED_CLASS = "local.caelestia.typed-notes"
 NOTE_CLASS = "local.caelestia.note"  # editable notes other than the inbox
+SEARCH_CLASS = "local.caelestia.note-search"  # read-only views from the palette
 PEN_CLASSES = {"com.github.flxzt.rnote", "rnote"}
 NOTE_SUFFIXES = (".md", ".markdown", ".txt", ".org")
+NVIM = HOME / ".local/bin/nvim"
+RUNTIME = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp"))
 # Buffer-local saves keep normal editor behavior untouched elsewhere.
 AUTOSAVE = ("lua vim.api.nvim_create_autocmd({'TextChanged','TextChangedI','InsertLeave',"
             "'FocusLost','BufLeave'},{buffer=0,callback=function() "
@@ -177,6 +181,31 @@ def note_heading(name):
     return f"# {stem}\n\n"
 
 
+def note_socket(path, mode):
+    """Neovim server socket for a note: mode "ro" (read-only view) or "ed" (editor).
+    The palette computes the same name (md5 of the absolute path) for its views."""
+    digest = hashlib.md5(str(path).encode()).hexdigest()[:12]
+    return RUNTIME / f"caelestia-note-{mode}-{digest}.sock"
+
+
+def at_line(line):
+    """Neovim args opening at `line`. `-c N`, not `+N`: Ghostty swallows `+word`
+    arguments as its own actions, even after -e. (The nvim config's restore-cursor
+    autocmd yields to either form.)"""
+    return ["-c", str(int(line))] if line else []
+
+
+def nvim_send(socket, keys):
+    """Send keys to a running note's Neovim; False when nothing is listening."""
+    if not socket.exists():
+        return False
+    try:
+        return subprocess.run([str(NVIM), "--server", str(socket), "--remote-send", keys],
+                              capture_output=True, timeout=3).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
 def open_note_window(args, is_kind, clients):
     """Spawn args, then move the first new window that is_kind accepts into the
     notes workspace. Only claims windows created by this call."""
@@ -193,19 +222,24 @@ def open_note_window(args, is_kind, clients):
 
 def edit_note(path, line=None, extra=()):
     """Editable Neovim on a note in the notes workspace, autosaving. A window
-    already showing this note is reused (no duplicate editors or swap prompts)."""
+    already editing this note is reused and jumps to `line` (no duplicate editors
+    or swap prompts); a read-only view of it is closed, since editing supersedes it."""
     path = Path(path).resolve()
+    nvim_send(note_socket(path, "ro"), "<C-\\><C-N>:qa!<CR>")
     clients = recent(ipc("clients"))
     inbox = path == (NOTES / "Inbox.md").resolve()
     title = "Typed notes" if inbox else "Note — " + str(path.relative_to(NOTES.resolve()))
     klass = TYPED_CLASS if inbox else NOTE_CLASS
+    socket = note_socket(path, "ed")
     existing = [c for c in clients if c["class"] == klass and (inbox or c.get("title") == title)]
     if existing:
         show_notes(existing[0])
+        if line:
+            nvim_send(socket, f"<C-\\><C-N>:{int(line)}<CR>zz")
         return
-    position = ["+" + str(line)] if line else []
+    socket.unlink(missing_ok=True)  # a crashed editor's leftover would block --listen
     open_note_window(["ghostty", "--class=" + klass, "--title=" + title, "-e",
-                      str(HOME / ".local/bin/nvim"), "-c", AUTOSAVE, *extra, *position, "--", str(path)],
+                      str(NVIM), "--listen", str(socket), "-c", AUTOSAVE, *extra, *at_line(line), "--", str(path)],
                      lambda c: c["class"] == klass, clients)
 
 
@@ -226,14 +260,36 @@ def notes_new():
     edit_note(path, line=2, extra=("-c", "startinsert"))
 
 
-def notes_open(path, line):
-    """Open an existing note for editing (from the palette's note search)."""
+def checked_note(path):
+    """A palette-supplied path, accepted only if it is a real note file in NOTES."""
     path = Path(path)
     if (not path.is_file() or path.is_symlink()
             or not path.resolve().is_relative_to(NOTES.resolve())
             or path.suffix.lower() not in NOTE_SUFFIXES):
         raise ValueError("That note moved or is not in Documents/Notes.")
-    edit_note(path, line=max(1, int(line)))
+    return path.resolve()
+
+
+def notes_open(path, line):
+    """Open an existing note for editing (from the palette's note search)."""
+    edit_note(checked_note(path), line=max(1, int(line)))
+
+
+def notes_view(path, line):
+    """Read-only view of a note at a line (the palette's Enter). An open view of
+    the same note is reused and jumps there instead of stacking another window."""
+    path, line = checked_note(path), max(1, int(line))
+    title = "Note reference — " + str(path.relative_to(NOTES.resolve()))
+    socket = note_socket(path, "ro")
+    clients = recent(ipc("clients"))
+    existing = [c for c in clients if c["class"] == SEARCH_CLASS and c.get("title") == title]
+    if existing and nvim_send(socket, f"<C-\\><C-N>:{line}<CR>zz"):
+        show_notes(existing[0])
+        return
+    socket.unlink(missing_ok=True)
+    open_note_window(["ghostty", "--class=" + SEARCH_CLASS, "--title=" + title, "-e",
+                      str(NVIM), "--listen", str(socket), "-R", "-n", *at_line(line), "--", str(path)],
+                     lambda c: c["class"] == SEARCH_CLASS, clients)
 
 
 NOTE_CHOICES = ["Typed notes  —  Markdown inbox",
@@ -273,8 +329,10 @@ def notes(force_choose=False):
         inbox = NOTES / "Inbox.md"
         if not inbox.exists():
             inbox.write_text("# Inbox\n\n")
+        socket = note_socket(inbox.resolve(), "ed")
+        socket.unlink(missing_ok=True)
         open_note_window(["ghostty", "--class=" + TYPED_CLASS, "--title=Typed notes", "-e",
-                          str(HOME / ".local/bin/nvim"), "-c", AUTOSAVE, str(inbox)], is_kind, clients)
+                          str(NVIM), "--listen", str(socket), "-c", AUTOSAVE, str(inbox)], is_kind, clients)
     else:
         notebook = NOTES / "Pen notes.rnote"
         if not notebook.exists():
@@ -318,14 +376,15 @@ def palette_launcher(*args):
 def main():
     actions = {"windows": windows, "previous": previous, "notes": notes,
                "notes-choose": lambda: notes(True), "notes-new": notes_new,
-               "notes-open": lambda: notes_open(*sys.argv[2:4]), "ocr": ocr,
+               "notes-open": lambda: notes_open(*sys.argv[2:4]),
+               "notes-view": lambda: notes_view(*sys.argv[2:4]), "ocr": ocr,
                "projects": lambda: spawn(["ghostty", "-e", str(HOME/".local/bin/tmux-revive")]),
                "palette": lambda: palette_launcher("toggle"),
                "notes-search": lambda: palette_launcher("show", "notes")}
-    # notes-open takes a note path and line; every other action takes nothing.
-    arity = 4 if len(sys.argv) > 1 and sys.argv[1] == "notes-open" else 2
+    # notes-open/notes-view take a note path and line; every other action takes nothing.
+    arity = 4 if len(sys.argv) > 1 and sys.argv[1] in ("notes-open", "notes-view") else 2
     if len(sys.argv) != arity or sys.argv[1] not in actions:
-        raise SystemExit("Usage: workflows.py {" + "|".join(actions) + "} (notes-open PATH LINE)")
+        raise SystemExit("Usage: workflows.py {" + "|".join(actions) + "} (notes-open|notes-view PATH LINE)")
     action = sys.argv[1]
     runtime = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp"))
     lock_name = "notes" if action.startswith("notes") else action

@@ -9,7 +9,7 @@ import {execFileSync} from 'node:child_process';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const source = readFileSync(join(here, 'Engine.js'), 'utf8').replace(/^\.pragma library\n/, '');
-const E = new Function(source + '\nreturn {Model, normalized, rank, marked, buildCatalog, selectNoteFiles, parseScheme, themeColors, contrast, displayKeys, describedBind};')();
+const E = new Function(source + '\nreturn {Model, normalized, rank, marked, categoriesOf, relativeTime, buildCatalog, selectNoteFiles, parseScheme, themeColors, contrast, displayKeys, describedBind};')();
 
 const entry = (id, label, extra = {}) => Object.assign({id, label, group: 'Windows', keys: ['SUPER + X'], lua: 'hl.dsp.no_op()'}, extra);
 const model = (entries, extra = {}) => new E.Model(Object.assign({entries, active: {address: '0x1', title: 'Test window'}, clients: [{address: '0x1', mapped: true, focusHistoryID: 0}]}, extra));
@@ -140,6 +140,30 @@ test('notes open read-only by default and for editing on request', () => {
     m.handle({op: 'query', query: 'rocket', category: 'All'});
     m.handle({op: 'activate', id: row.id, edit: true});
     assert.deepEqual(m.handle({op: 'execute', id: row.id}).plan, {type: 'note', path: 'Ideas.md', line: 2, edit: true});
+});
+
+test('note search: filename covers some terms, recent notes first', () => {
+    const now = Date.UTC(2026, 9, 3, 12);
+    const notes = {files: [
+        {path: 'Signals.md', text: '# Signals\nFourier series\nsampling', mtime: now - 3 * 3600e3},
+        {path: 'Inbox.md', text: '# Inbox\nbuy milk', mtime: now - 60e3},
+        {path: 'Old.md', text: 'fourier', mtime: now - 9 * 86400e3},
+    ], skipped: 0};
+    const m = model([], {start: 'notes', notes, now});
+    const empty = m.handle({op: 'init'}).rows;
+    assert.deepEqual(empty.map(r => r.title), ['Inbox.md', 'Signals.md', 'Old.md']);
+    assert.deepEqual(empty.map(r => r.subtitle), ['Edited 1 min ago', 'Edited 3 h ago', 'Edited 2026-09-24']);
+    assert.equal(empty[0].section, 'Recently edited');
+    const rows = m.handle({op: 'query', query: 'signals fourier', category: 'All'}).rows;
+    assert.deepEqual(rows.map(r => [r.title, r.subtitle]), [['Signals.md', '1 matching line · line 2']]);
+    assert.equal(m.handle({op: 'query', query: 'inbox', category: 'All'}).rows[0].subtitle, 'Filename match');
+});
+
+test('every catalog group gets a chip, in a stable order', () => {
+    const groups = ['Media', 'Gestures', 'Windows', 'Mouse', 'Other', 'Your workflows', 'Hardware', 'Utilities'];
+    assert.deepEqual(E.categoriesOf(groups.map((group, i) => ({id: 'x' + i, label: 'x', group}))),
+        ['All', 'Your workflows', 'Windows', 'Media', 'Gestures', 'Hardware', 'Mouse', 'Utilities', 'Other', 'Guides']);
+    assert.equal(E.relativeTime(0, 86400e3 * 1.5), 'yesterday');
 });
 
 test('oversized notes are disclosed; notes view waits for indexing', () => {
