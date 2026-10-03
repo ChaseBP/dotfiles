@@ -1,6 +1,8 @@
-# 🛠 Dotfiles (WSL Ubuntu)
+# 🛠 Dotfiles
 
-Personal dotfiles for my **WSL Ubuntu** development environment.
+Personal dotfiles for my development environments: the terminal setup
+(zsh, Neovim, tmux) runs on **WSL Ubuntu** and on my **CachyOS / Hyprland**
+desktop; the `caelestia` step is desktop-only.
 
 This repository focuses on a clean, reproducible setup with:
 
@@ -51,10 +53,21 @@ Layered on top of an existing `caelestia install`; never touches `~/.config/hypr
   every live keybind, lets you search it, and runs your workflows.
   Personal actions live in `actions.json`, which feeds both the Hyprland binds and
   the palette.
-- Hand-forked shell QML (network UI, background) overlaid on the symlink farm
+  It stays resident, so it opens in ~55 ms (`caelestia-palette`).
+- **Notes**: Super+R inbox / Super+Shift+N named notes / Rnote pen notes in a
+  notes scratchpad; searchable and editable from the palette.
+- **`caelestia-doctor`**: run after `caelestia update`. Checks the symlink farm,
+  upstream changes to forked QML, the shell's log, the palette's design tokens,
+  Hyprland config and bindings, and the tests; `--fix` repairs the safe things.
+  Runs itself at login when package versions change.
+- Hand-forked shell QML (network UI, background) overlaid on the symlink farm,
+  with the upstream base they're tracked against
 - Helper scripts (`wall`, `osk`, `xppen-tablet`, `cliphist-store`) and XP-Pen
   Deco 640 fixes (tray shim, libinput-ignore udev rule)
 - Everything symlinked per file; originals kept as `*.pre-dotfiles`
+- Tests: `node --test caelestia/config/palette/test_palette.mjs`,
+  `python3 -m unittest discover -s caelestia/tests`,
+  `(cd caelestia/config/scripts && python3 -m unittest test_workflows)`
 
 ### Tooling Dependencies
 
@@ -88,7 +101,9 @@ dotfiles/
 ├── caelestia/
 │   ├── config/        # → ~/.config/caelestia
 │   ├── quickshell/    # → ~/.config/quickshell/caelestia (forks only)
-│   ├── bin/           # → ~/.local/bin
+│   ├── quickshell-base/  # upstream originals the forks are tracked against
+│   ├── bin/           # → ~/.local/bin (incl. caelestia-doctor, caelestia-palette)
+│   ├── tests/         # caelestia-doctor tests
 │   ├── xppen-tray/    # close-to-tray LD_PRELOAD shim
 │   └── system/        # udev rule (copied to /etc)
 │

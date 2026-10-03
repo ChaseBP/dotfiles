@@ -52,6 +52,7 @@ fi
 # ------------------------------
 info "🔗 Linking helper scripts..."
 for f in "$SRC"/bin/*; do
+  [ -f "$f" ] || continue  # scripts only — never caches or folders
   link_file "$f" "$HOME/.local/bin/$(basename "$f")"
 done
 

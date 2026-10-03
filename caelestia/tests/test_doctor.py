@@ -7,12 +7,14 @@ from importlib.machinery import SourceFileLoader
 import json
 import os
 from pathlib import Path
+import sys
 import tempfile
 import time
 import unittest
 from unittest.mock import patch
 
 DOCTOR = Path(__file__).resolve().parent.parent / "bin" / "caelestia-doctor"
+sys.dont_write_bytecode = True  # loading the script must not drop a __pycache__ into bin/
 _loader = SourceFileLoader("caelestia_doctor", str(DOCTOR))
 _spec = importlib.util.spec_from_loader("caelestia_doctor", _loader)
 doctor = importlib.util.module_from_spec(_spec)
