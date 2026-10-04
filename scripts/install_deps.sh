@@ -38,7 +38,9 @@ elif dry; then
   info "   [dry-run] would install nvm $NVM_VERSION"
 else
   info "⬇  Installing NVM $NVM_VERSION..."
-  curl -fsSL "https://raw.githubusercontent.com/nvm-sh/nvm/$NVM_VERSION/install.sh" | bash
+  # PROFILE=/dev/null: nvm must not append itself to ~/.zshrc — that file is a symlink
+  # into this repo, and the tracked .zshrc deliberately activates mise instead.
+  curl -fsSL "https://raw.githubusercontent.com/nvm-sh/nvm/$NVM_VERSION/install.sh" | PROFILE=/dev/null bash
 fi
 
 # ------------------------------

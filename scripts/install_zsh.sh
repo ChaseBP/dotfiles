@@ -43,10 +43,15 @@ if command -v dos2unix >/dev/null 2>&1; then
 fi
 
 # --------------------------------------------------
-# 4. Link .zshrc (backs up a pre-existing real file)
+# 4. Link .zshrc & .zshenv (backs up pre-existing real files)
 # --------------------------------------------------
 info "🔗 Linking .zshrc"
 link_file "$ZSHRC_SOURCE" "$HOME/.zshrc"
+ZSHENV_SOURCE="$DOTFILES_DIR/zsh/.zshenv"
+if [ -f "$ZSHENV_SOURCE" ]; then
+  info "🔗 Linking .zshenv"
+  link_file "$ZSHENV_SOURCE" "$HOME/.zshenv"
+fi
 
 # --------------------------------------------------
 # 5. Install Oh My Zsh plugins
