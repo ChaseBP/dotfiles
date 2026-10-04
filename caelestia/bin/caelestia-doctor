@@ -120,7 +120,8 @@ def check_farm(report, fix):
         report.add("farm", FAIL, f"{UPSTREAM} is missing — is caelestia-shell installed?")
         return
     if not FARM.is_dir():
-        report.add("farm", FAIL, f"{FARM} is missing; the shell has nothing to run.", fix="caelestia install")
+        report.add("farm", FAIL, f"{FARM} is missing, so your forks are not in use (the shell runs stock from {UPSTREAM}).",
+                   fix="cd ~/dotfiles && ./install.sh --only caelestia   # rebuilds the farm + forks")
         return
     missing, dangling, foreign = farm_problems(FARM, UPSTREAM, FORKS)
     repaired = bool(fix and (missing or dangling))
@@ -187,6 +188,14 @@ def check_forks(report):
     if not FORKS.is_dir():
         report.add("forks", SKIP, "No forked QML in the dotfiles.")
         return
+    reverted = STATE / "forks-reverted"
+    if reverted.is_file() and reverted.read_text().strip():
+        names = reverted.read_text().split()
+        report.add("forks", FAIL, f"{len(names)} fork(s) are switched off: caelestia-shell-guard reverted them to "
+                   "stock after the shell failed to load them. Upstream's versions are running.",
+                   fix="merge upstream into the forks (see the drift below), then: caelestia-shell-guard restore "
+                       "&& caelestia-shell-guard test",
+                   detail=names)
     manifest = base_manifest()
     rows = fork_drift(FORKS, UPSTREAM, BASE, manifest)
     changed = [r for r, s in rows if s == "upstream-changed"]

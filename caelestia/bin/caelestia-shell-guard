@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+# caelestia-shell-guard - never be left without a desktop because a hand-forked
+# shell QML file stopped loading against a newer caelestia-shell.
+#
+#   caelestia-shell-guard check    exit 0 when the shell is up and its config loaded
+#   caelestia-shell-guard login    session start: wait for the shell; if it never comes
+#                                  up while forks are linked, swap them back to stock,
+#                                  restart the shell and say so (hypr-user.lua runs this)
+#   caelestia-shell-guard test     restart the shell now and apply the same fallback
+#                                  (the dotfiles installer runs this inside a session)
+#   caelestia-shell-guard revert   swap every fork link back to the stock file
+#   caelestia-shell-guard restore  re-link the forks after merging upstream changes
+#   caelestia-shell-guard status   which forks are linked / reverted
+#
+# Forks are the files under ~/dotfiles/caelestia/quickshell, linked over the
+# ~/.config/quickshell/caelestia symlink farm (built by install_caelestia.sh; qs
+# prefers that directory over the package's /etc/xdg tree). When the shell won't
+# come up, the fallback escalates, testing after each stage:
+#   1. caelestia-doctor --fix   reconcile the farm (new upstream files get linked)
+#   2. revert                   forks back to stock
+#   3. move the farm aside      qs runs the package tree directly: pure stock
+set -uo pipefail
+
+FARM="$HOME/.config/quickshell/caelestia"
+STOCK="/etc/xdg/quickshell/caelestia"
+HERE="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
+FORKS="$(cd "$HERE/../quickshell" && pwd)"
+DOCTOR="$HERE/caelestia-doctor"   # by path: a login hook's PATH may lack ~/.local/bin
+STATE="${XDG_STATE_HOME:-$HOME/.local/state}/caelestia/forks-reverted"
+WAIT="${GUARD_WAIT:-40}"
+
+notify() { # [-u urgency] title body
+  command -v notify-send >/dev/null 2>&1 && notify-send -a "Caelestia" "$@"
+  [ "$1" = -u ] && shift 2
+  printf '%s: %s\n' "$1" "${2:-}" >&2
+}
+
+# Loaded = IPC answers AND lists the shell's handlers. A qs process whose config
+# failed to load stays alive (waiting for edits) but registers no targets.
+check() { timeout 5 qs -c caelestia ipc show 2>/dev/null | grep -q '^target wallpaper'; }
+
+wait_up() { local i; for ((i = 0; i < WAIT; i++)); do check && return 0; sleep 1; done; return 1; }
+
+forks() { (cd "$FORKS" && find . -type f -printf '%P\n' | sort); }
+
+linked() { # forks currently pointing into the repo
+  local rel
+  while IFS= read -r rel; do
+    [ "$(readlink "$FARM/$rel" 2>/dev/null)" = "$FORKS/$rel" ] && printf '%s\n' "$rel"
+  done < <(forks)
+}
+
+# Every shell process, however it was started: `caelestia shell -k` only finds instances
+# whose config resolves to the *current* path, so one started while the farm was
+# missing (pure stock) would survive and double the bar. Anchored so it can't match
+# the pgrep/pkill command line itself — and never the palette (qs -p ...).
+SHELL_PROCS='^qs -c caelestia( |$)'
+
+restart_shell() {
+  caelestia shell -k >/dev/null 2>&1 || true
+  pkill -f "$SHELL_PROCS" 2>/dev/null || true
+  local i; for ((i = 0; i < 50; i++)); do pgrep -f "$SHELL_PROCS" >/dev/null || break; sleep 0.2; done
+  pkill -9 -f "$SHELL_PROCS" 2>/dev/null || true
+  caelestia shell -d >/dev/null 2>&1
+}
+
+revert() {
+  local rel n=0
+  mkdir -p "$(dirname "$STATE")"
+  : >"$STATE"
+  while IFS= read -r rel; do
+    if [ -e "$STOCK/$rel" ]; then ln -sfn "$STOCK/$rel" "$FARM/$rel"
+    else rm -f "$FARM/$rel"   # fork-only file (e.g. NetworkPasswordPage.qml)
+    fi
+    printf '%s\n' "$rel" >>"$STATE"; n=$((n + 1))
+  done < <(linked)
+  echo "reverted $n fork(s) to stock"
+}
+
+restore() {
+  local rel
+  while IFS= read -r rel; do
+    mkdir -p "$(dirname "$FARM/$rel")"
+    ln -sfn "$FORKS/$rel" "$FARM/$rel"
+  done < <(forks)
+  rm -f "$STATE"
+  echo "linked $(forks | wc -l) fork(s); run: caelestia-shell-guard test"
+}
+
+# Shell is down (or was just restarted with forks): escalate until it comes up.
+fallback() {
+  local ver; ver=$(pacman -Q caelestia-shell 2>/dev/null | cut -d' ' -f2)
+  if [ -d "$FARM" ] && [ -x "$DOCTOR" ]; then
+    "$DOCTOR" --fix >/dev/null 2>&1
+    restart_shell
+    if wait_up; then
+      notify -u normal "Shell repaired" "caelestia-shell $ver added or removed files; the symlink farm was reconciled."
+      return 0
+    fi
+  fi
+  if [ -n "$(linked)" ]; then
+    revert >/dev/null
+    restart_shell
+    if wait_up; then
+      notify -u critical "Shell forks disabled" \
+        "The forked QML no longer loads with caelestia-shell $ver. Stock files are in use (network password page etc. are upstream's again). Run caelestia-doctor; re-enable with: caelestia-shell-guard restore"
+      return 0
+    fi
+  fi
+  if [ -d "$FARM" ]; then
+    local aside; aside="$FARM.disabled-$(date +%Y%m%d-%H%M%S)"
+    mv "$FARM" "$aside"
+    restart_shell
+    if wait_up; then
+      notify -u critical "Shell running pure stock" \
+        "Nothing in ~/.config/quickshell/caelestia would load, so it was moved to $(basename "$aside"). Rebuild it with: ~/dotfiles/install.sh --only caelestia"
+      return 0
+    fi
+  fi
+  notify -u critical "Shell failed to start" "Even stock Caelestia won't load. Details: caelestia shell -l — or log into Plasma."
+  return 1
+}
+
+case "${1:-status}" in
+  check)   check ;;
+  login)   wait_up || fallback ;;
+  test)    restart_shell; if wait_up; then echo "shell OK with $(linked | wc -l) fork(s)"; else fallback; fi ;;
+  revert)  revert ;;
+  restore) restore ;;
+  status)
+    echo "linked:";   linked | sed 's/^/  /'
+    [ -s "$STATE" ] && { echo "reverted (stock in use):"; sed 's/^/  /' "$STATE"; }
+    check && echo "shell: up" || echo "shell: DOWN" ;;
+  *) sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+esac

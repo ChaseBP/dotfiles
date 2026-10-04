@@ -6,7 +6,7 @@
 #   wall refresh      restart the caelestia shell so its Wallpapers UI re-indexes
 #   wall /path/to.jpg set an explicit file
 # A "collection" is a subdirectory of ~/Pictures/Wallpapers holding images.
-# Directories named "spares" are ignored.
+# Directories named "spares" and hidden ones (the folder's own .git) are ignored.
 set -euo pipefail
 
 ROOT="${WALL_ROOT:-$HOME/Pictures/Wallpapers}"
@@ -25,7 +25,7 @@ elif [[ -n $SCOPE ]]; then          SEARCH=("$ROOT/$SCOPE")
 else
   SEARCH=()
   while IFS= read -r d; do SEARCH+=("$d"); done < <(
-    find -L "$ROOT" -mindepth 1 -maxdepth 1 -type d ! -name spares | sort)
+    find -L "$ROOT" -mindepth 1 -maxdepth 1 -type d ! -name spares ! -name '.*' | sort)
   # loose images sitting directly in ROOT count as a collection too
   SEARCH+=("$ROOT")
 fi
