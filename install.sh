@@ -11,12 +11,12 @@
 #   --list        print the available steps
 #   -h, --help    this message
 #
-# Steps run in order: zsh deps nvim tmux caelestia. A failing step doesn't abort the
+# Steps run in order: zsh deps nvim tmux desktop caelestia. A failing step doesn't abort the
 # rest — the summary at the end shows what to retry with --only <step>.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
-STEPS=(zsh deps nvim tmux caelestia)
+STEPS=(zsh deps nvim tmux desktop caelestia)
 ONLY=""; SKIP=""
 
 usage() { sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; }
@@ -62,7 +62,7 @@ done
 
 printf '\n📋 Summary\n'
 for s in "${STEPS[@]}"; do
-  printf '   %-6s %s\n' "$s" "${status[$s]}"
+  printf '   %-10s %s\n' "$s" "${status[$s]}"
 done
 if [ "$failed" = 1 ]; then
   printf '\n❌ Some steps failed — retry one with: ./install.sh --only <step>\n'

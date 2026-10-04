@@ -1,0 +1,41 @@
+# Official/CachyOS repo packages added on top of a CachyOS Hyprland install.
+# `caelestia install` pulls its own set (thunar, fish, foot, btop, starship,
+# fonts, pipewire, ...), so only what it does NOT bring is listed here.
+# One package per line; '#' starts a comment.
+
+# Session. On the recommended KDE install none of this exists yet; on the
+# Hyprland edition it's all there already (--needed skips it).
+hyprland
+uwsm                  # the "Hyprland (uwsm-managed)" session; ~/.config/uwsm/env
+xdg-desktop-portal-hyprland
+
+# Apps
+ghostty               # terminal (hypr-vars.lua: terminal = "ghostty")
+discord
+rnote                 # pen notes (workflows.py notes)
+snapshot              # camera
+mpv
+mpv-mpris
+vlc
+imv
+swayimg               # mimeapps: image/png
+zathura
+zathura-pdf-mupdf
+gnome-text-editor     # mimeapps: text/plain (came with the Hyprland edition; absent on KDE)
+
+# Shell / CLI tools used by zsh and the palette workflows
+atuin
+mise
+fd
+fzf
+imagemagick           # `wall` thumbnails
+tesseract             # OCR workflow (model: ~/.local/share/tessdata, fetched by the caelestia step)
+tesseract-data-eng    # names the provider: --noconfirm otherwise picks the first (afr)
+libva-utils
+playerctl
+
+# Desktop plumbing
+udiskie               # automount (hypr-user.lua)
+gvfs
+tumbler
+webp-pixbuf-loader

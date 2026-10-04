@@ -1,0 +1,2 @@
+# Only with an XP-Pen tablet (USB vendor 28bd), or --with xppen.
+xp-pen-tablet         # AUR: XP-Pen's official driver (/usr/lib/pentablet)

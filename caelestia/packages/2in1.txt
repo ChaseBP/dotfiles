@@ -1,0 +1,4 @@
+# Only when the machine has a tablet-mode hinge or an accelerometer.
+iio-sensor-proxy      # repo
+iio-hyprland-git      # AUR: auto-rotate the internal panel
+wvkbd                 # AUR: on-screen keyboard (osk)

@@ -45,7 +45,12 @@ Designed to be safe, minimal, and easy to reuse across machines.
 
 ### Caelestia (Arch / CachyOS desktop)
 
-Layered on top of an existing `caelestia install`; never touches `~/.config/hypr`.
+**New machine? → [docs/new-machine.md](docs/new-machine.md)** (install CachyOS with
+KDE Plasma, run the bootstrap from Konsole, log into Hyprland).
+
+The `desktop` step installs Caelestia itself (real `quickshell-git` first, then
+`caelestia install`, non-interactive); the `caelestia` step layers the personal
+config on top and never touches `~/.config/hypr`.
 
 - `hypr-vars.lua` / `hypr-user.lua` / `shell.json` / `cli.json` overrides
 - **Super+K shortcut palette**: a native Quickshell panel styled with Caelestia's
@@ -62,8 +67,13 @@ Layered on top of an existing `caelestia install`; never touches `~/.config/hypr
   Runs itself at login when package versions change.
 - Hand-forked shell QML (network UI, background) overlaid on the symlink farm,
   with the upstream base they're tracked against
+- **`caelestia-shell-guard`**: at login, if the forks stop the shell from
+  loading, swaps them back to stock and restarts it (toast instead of black screen)
+- Per-machine `host.lua` (generated from the hardware): 2-in-1 hinge, pen/touch
+  pinning, auto-rotate, on-screen keyboard, NVIDIA env — off on other machines
 - Helper scripts (`wall`, `osk`, `xppen-tablet`, `cliphist-store`) and XP-Pen
-  Deco 640 fixes (tray shim, libinput-ignore udev rule)
+  Deco 640 fixes (tray shim, libinput-ignore udev rule), only with the tablet
+- Wallpapers: private repo `ChaseBP/dotfiles-wallpaper`, cloned by hand
 - Everything symlinked per file; originals kept as `*.pre-dotfiles`
 - Tests: `node --test caelestia/config/palette/test_palette.mjs`,
   `python3 -m unittest discover -s caelestia/tests`,
@@ -104,18 +114,25 @@ dotfiles/
 │   ├── quickshell-base/  # upstream originals the forks are tracked against
 │   ├── bin/           # → ~/.local/bin (incl. caelestia-doctor, caelestia-palette)
 │   ├── tests/         # caelestia-doctor tests
+│   ├── home/          # → ~ (ghostty, atuin, mise, uwsm env)
+│   ├── seed/          # copied once (HyprMod settings, mimeapps, locale, cursor)
+│   ├── packages/      # repo / aur / 2in1 / xppen package lists
+│   ├── xppen/         # XP-Pen launcher + autostart mask (tablet only)
 │   ├── xppen-tray/    # close-to-tray LD_PRELOAD shim
-│   └── system/        # udev rule (copied to /etc)
+│   └── system/        # /etc drop-ins (DNS-over-TLS, journald, MAC privacy, XP-Pen)
 │
 ├── scripts/
 │   ├── install_zsh.sh
 │   ├── install_deps.sh
 │   ├── install_nvim.sh
 │   ├── install_tmux.sh
-│   └── install_caelestia.sh
+│   ├── install_desktop.sh   # CachyOS packages + Caelestia itself
+│   ├── install_caelestia.sh # personal layer
+│   └── detect_hw.sh         # read-only hardware facts
 │
 └── docs/
     ├── screenshots/
+    ├── new-machine.md
     └── wsl-notes.md
 ```
 
@@ -144,7 +161,7 @@ Useful flags:
 ./install.sh --only zsh,tmux    # run a subset of steps
 ./install.sh --skip nvim        # run everything except a step
 ./install.sh --no-sudo          # no sudo: skip system packages, install to ~/.local
-./install.sh --list             # list the steps (zsh deps nvim tmux caelestia)
+./install.sh --list             # list the steps (zsh deps nvim tmux desktop caelestia)
 ```
 
 The installer detects apt/dnf/pacman, backs up any real config file it

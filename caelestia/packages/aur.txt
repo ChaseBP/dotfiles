@@ -1,0 +1,4 @@
+# AUR packages (built with paru). quickshell-git is NOT listed here: the
+# desktop step installs it first, on purpose — see install_desktop.sh.
+hyprmod               # GUI for look & monitor settings (~/.config/hypr/hyprland-gui.lua)
+bibata-cursor-theme-bin  # hypr-vars.lua: cursorTheme = "Bibata-Modern-Ice" (was hand-copied into ~/.local/share/icons)

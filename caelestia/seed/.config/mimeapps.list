@@ -1,0 +1,11 @@
+[Added Associations]
+image/png=swayimg.desktop;
+image/jpeg=swappy.desktop;
+application/pdf=firefox.desktop;
+
+[Default Applications]
+inode/directory=org.kde.dolphin.desktop;
+text/plain=org.gnome.TextEditor.desktop;
+x-scheme-handler/http=firefox.desktop;
+x-scheme-handler/https=firefox.desktop;
+x-scheme-handler/claude-cli=claude-code-url-handler.desktop
