@@ -8,9 +8,15 @@ local bin = os.getenv("HOME") .. "/.local/bin/"
 -- and the resident palette at every login; they came back only at the next config
 -- reload. A reload re-runs the guarded command, so a daemon that died comes back
 -- then too. Every command must be idempotent (pgrep guard, or `start` semantics).
+-- config.reloaded also fires for the very first load (before the compositor is up),
+-- and Lua state doesn't survive a reload, so tell them apart by the age of the lock
+-- file Hyprland writes once it has started: missing or younger than 15 s = startup.
 local function daemon(cmd)
     hl.on("hyprland.start", function() hl.exec_cmd(cmd) end)
-    hl.on("config.reloaded", function() hl.exec_cmd(cmd) end)
+    hl.on("config.reloaded", function()
+        hl.exec_cmd('l="$XDG_RUNTIME_DIR/hypr/$HYPRLAND_INSTANCE_SIGNATURE/hyprland.lock"; '
+            .. '[ -f "$l" ] && [ $(( $(date +%s) - $(stat -c %Y "$l") )) -gt 15 ] && { ' .. cmd .. '; }')
+    end)
 end
 
 -- Machine-specific facts (internal panel, 2-in-1 hinge, GPU) live in host.lua beside
