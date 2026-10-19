@@ -20,7 +20,7 @@ Use the same username (`raven`) — a couple of launcher entries assume it.
 
 ```bash
 sudo pacman -S --needed git
-curl -fsSL https://raw.githubusercontent.com/ChaseBP/dotfiles/main/bootstrap.sh | bash
+curl -fsSL https://raw.githubusercontent.com/ChaseBP/dotfiles/cachyos/bootstrap.sh | bash
 ```
 
 It asks for your password once, up front, and keeps sudo alive through the
