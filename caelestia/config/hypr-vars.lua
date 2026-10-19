@@ -9,7 +9,7 @@ return {
 	kbMusicWs = {}, -- unused; keep media controls available
 	kbShowPanels = "SUPER + CTRL + K", -- Super+K opens the shortcut palette
 	cursorTheme = "Bibata-Modern-Ice", -- upstream sweet-cursors is not installed
-	sleepGestureCmd = "systemctl suspend", -- hibernate cannot work: zram-only swap, no resume=
+	-- sleepGestureCmd stays upstream's suspend-then-hibernate: /swap/swapfile + resume= since 2026-10-19
 	gestureFingersMore = 5, -- 4 collided with workspaceSwipeFingers -> accidental suspend
 	touchpadScrollFactor = 0.9, -- upstream 0.3 made every app need twice the swiping
 }
