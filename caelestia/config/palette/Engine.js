@@ -308,7 +308,7 @@ function buildCatalog(vars, binds, actions) {
     }
     for (const [fingers, direction, label] of [
         [vars.workspaceSwipeFingers, 'horizontal', 'Change workspace'],
-        [vars.gestureFingers, 'up', 'Show scratchpad'],
+        [vars.gestureFingers, 'up', 'Open or hide notes'],
         [vars.gestureFingers, 'down', 'Hide or show scratchpad'],
         [vars.gestureFingersMore, 'down', 'Suspend computer'],
     ])

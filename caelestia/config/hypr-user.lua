@@ -144,6 +144,18 @@ end
 -- every config reload: `start` does nothing when it is already running.
 hl.exec_cmd(bin .. "caelestia-palette start")
 
+-- Swipe up to open or hide notes, mirroring swipe down for the scratchpad: the same
+-- workflow as Super+R. Upstream's gestures.lua gives this swipe to "show scratchpad",
+-- which swipe down already toggles; hl.gesture refuses a gesture another one already
+-- covers ("will be overshadowed"), so unset upstream's first.
+do
+    local fingers = require("variables").gestureFingers
+    hl.gesture({ fingers = fingers, direction = "up", action = "unset" })
+    hl.gesture({ fingers = fingers, direction = "up", action = function()
+        hl.exec_cmd(workflows .. " notes")
+    end })
+end
+
 -- Session start, two checks:
 --  * caelestia-shell-guard: if the hand-forked shell QML stops loading after an upgrade
 --    (or on a fresh machine with a newer caelestia-shell), swap the forks back to stock

@@ -15,6 +15,7 @@ are changed.
 | Super+R | Hide visible notes; resume notes already in the scratchpad; otherwise choose typed or pen notes |
 | Super+Shift+R | Always show the notes chooser: inbox, new note, or pen notes |
 | Super+Shift+N | Create a new named note and start typing |
+| 3-finger swipe up | Same as Super+R (3-finger swipe down is the scratchpad) |
 | Super+Shift+O | Select a screen region, recognize English text, and copy it |
 
 Super+M is disabled. Todoist is disabled in the scratchpad configuration.
