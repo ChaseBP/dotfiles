@@ -14,6 +14,8 @@ export VISUAL="nvim"
 # ==========================================================
 # Path
 # ==========================================================
+# Keep PATH free of duplicates: the session environment already carries ~/.local/bin.
+typeset -U path PATH
 [ -d "$HOME/.local/bin" ] && export PATH="$HOME/.local/bin:$PATH"
 
 # ==========================================================

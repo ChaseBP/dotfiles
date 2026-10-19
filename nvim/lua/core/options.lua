@@ -80,3 +80,10 @@ if vim.fn.executable 'rg' == 1 then
   opt.grepprg = 'rg --vimgrep --smart-case --hidden'
   opt.grepformat = '%f:%l:%c:%m'
 end
+
+-- No remote-plugin providers: every plugin here is Lua (copilot.lua runs node itself),
+-- so these only produced :checkhealth warnings and a little startup probing.
+vim.g.loaded_python3_provider = 0
+vim.g.loaded_node_provider = 0
+vim.g.loaded_perl_provider = 0
+vim.g.loaded_ruby_provider = 0
