@@ -166,6 +166,12 @@ link_tree "$SRC/home" "$HOME"
 info "🌱 Seeding app-owned files (HyprMod settings, default apps, locale, cursor)..."
 seed_tree "$SRC/seed" "$HOME"
 
+# One monospace font everywhere: fontconfig's alias (caelestia/home/.config/fontconfig)
+# covers Firefox and Qt; GTK/GNOME apps read their own setting.
+if command -v gsettings >/dev/null 2>&1 && fc-list : family | grep -q "JetBrainsMono Nerd Font"; then
+  run gsettings set org.gnome.desktop.interface monospace-font-name 'JetBrainsMono Nerd Font 11'
+fi
+
 # Thunar's "Open terminal here" action ships pointing at foot.
 UCA="$HOME/.config/Thunar/uca.xml"
 if [ -f "$UCA" ] && grep -q '<command>foot -D %f</command>' "$UCA"; then
