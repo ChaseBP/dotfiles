@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=XP-Pen Tablet
+Comment=XPPen driver settings
+# Wrapper sets QT_QPA_PLATFORM=xcb, enables the tray icon (/mini) and makes
+# closing the window hide it to the tray. See ~/.local/bin/xppen-tablet.
+Exec=/home/raven/.local/bin/xppen-tablet
+Icon=/usr/share/icons/hicolor/256x256/apps/xppentablet.png
+Terminal=false
+Type=Application
+Categories=Utility;Settings;
+StartupNotify=true

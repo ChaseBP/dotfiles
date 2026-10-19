@@ -1,6 +1,10 @@
-# Neovim
-.local/
-.cache/
+# Neovim state/cache if nvim ever runs with XDG dirs inside the repo. Anchored: an
+# unanchored .local/ also hid caelestia/**/home/.local/ (the XP-Pen launcher entry
+# and the FileManager1 override never got committed).
+/.local/
+/.cache/
+/nvim/.local/
+/nvim/.cache/
 
 # OS junk
 .DS_Store
