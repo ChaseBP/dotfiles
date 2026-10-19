@@ -3,6 +3,9 @@
   "files": {
     "modules/background/Background.qml": "dc99ebea9dee7893a185322d07348b3f7b54337e55bc71626b0c755d9dfa1ddd",
     "modules/background/Wallpaper.qml": "8339a889dd31202cb909b2423845f7f8f9e5990ac8545fe6aa600375036cadea",
+    "modules/launcher/AppList.qml": "11b85781e9a35e372f0266658419bea5d2cb297006208f90c6a0a27d57b42b9e",
+    "modules/launcher/items/VariantItem.qml": "1edab66efbef98b56a304372ffb65f1eaf9c3d71eabbf44bcb78b585018d9dfe",
+    "modules/launcher/services/M3Variants.qml": "9525ea54a4b83d080c72acab582f45c0ad6f97afbab1bc9e4c6ead9d668c75d6",
     "modules/nexus/NexusState.qml": "47f45e67f005e62fb2dd9f4742c01cddb1b4c6ee6fa262d2c363520896b79029",
     "modules/nexus/PageCompRegistry.qml": "ce2d0c6a670f77e2e3ee32af7a13959731e9ae057f9b953446f7ecce5c54d431",
     "modules/nexus/common/NetworkList.qml": "57585f622595d32b6344aa4677d543f186a9755be6b92fd0a9ce97116a3ad715",
@@ -13,5 +16,5 @@
     "utils/NetworkConnection.qml": "a582528bf3c456151e74c672ce11c18bf12775231fd07810d65f645d4882ff63"
   },
   "note": "Initial base recorded 2026-10-03 from caelestia-shell 2.5.0. The forks predate it (Sept 2025 tree) and the original base was not kept; they load cleanly against 2.5.0, so drift is measured from here. caelestia-doctor flags any later upstream change to these files.",
-  "recorded": "2026-10-03"
+  "recorded": "2026-10-19"
 }
