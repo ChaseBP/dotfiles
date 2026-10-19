@@ -2,6 +2,17 @@
 
 local bin = os.getenv("HOME") .. "/.local/bin/"
 
+-- Background daemons start when the session is up, never while this file is first
+-- parsed: at that point the Wayland socket isn't accepting clients yet, and Qt and
+-- D-Bus clients abort on the spot. Until 2026-10-19 that killed iio-hyprland, wvkbd
+-- and the resident palette at every login; they came back only at the next config
+-- reload. A reload re-runs the guarded command, so a daemon that died comes back
+-- then too. Every command must be idempotent (pgrep guard, or `start` semantics).
+local function daemon(cmd)
+    hl.on("hyprland.start", function() hl.exec_cmd(cmd) end)
+    hl.on("config.reloaded", function() hl.exec_cmd(cmd) end)
+end
+
 -- Machine-specific facts (internal panel, 2-in-1 hinge, GPU) live in host.lua beside
 -- this file. The dotfiles installer generates it from the hardware it finds; it is
 -- NOT tracked, so edit it freely. No host.lua = plain desktop: the hardware blocks
@@ -23,6 +34,17 @@ if host.nvidia then
     hl.env("NVD_BACKEND", "direct")
 end
 
+-- XWayland apps (Steam, every Proton game) render at native pixels. Without this,
+-- at scale 1.25 XWayland advertises a 1536x864 screen: games render at that and get
+-- stretched (blurry), and the in-game cursor drifts off what it is pointing at.
+hl.config({ xwayland = { force_zero_scaling = true } })
+-- ...which leaves Steam's own client UI at 1x (tiny); have it scale itself instead.
+hl.env("STEAM_FORCE_DESKTOPUI_SCALING", "1.25")
+-- Windowed games float at the size they asked for. Tiled, Hyprland squeezes a fixed-size
+-- X11 game window into the tile: the picture is cut off and the cursor no longer lines up
+-- with what the game thinks it is pointing at. (Upstream only tags them opaque/tearing.)
+hl.window_rule({ match = { class = "steam_app_[0-9]+|steam_app_default" }, float = true, center = true })
+
 -- Ensure Ghostty window rules: 100% opaque, zero transparency
 hl.window_rule({ match = { class = "com.mitchellh.ghostty" }, opaque = true, opacity = "1.0 override 1.0 override" })
 hl.window_rule({ match = { class = "ghostty" }, opaque = true, opacity = "1.0 override 1.0 override" })
@@ -32,6 +54,17 @@ hl.window_rule({ match = { class = "ghostty" }, opaque = true, opacity = "1.0 ov
 -- clipboard/emoji picker pattern). SUPER+ALT+W jumps to a random one.
 hl.bind("SUPER + SHIFT + W", hl.dsp.exec_cmd("pkill fuzzel || " .. bin .. "wall"))
 hl.bind("SUPER + ALT + W", hl.dsp.exec_cmd(bin .. "wall random"))
+
+-- XP-Pen's driver window (XWayland) floats, centred. Qt moves it back to its saved
+-- position right after it maps (overriding a `center` rule), and that position can be
+-- half off-screen, so re-centre it a moment after it opens.
+hl.window_rule({ match = { class = "PenTablet" }, float = true, center = true })
+hl.on("window.open", function(win)
+    if win and win.class == "PenTablet" then
+        hl.exec_cmd("sleep 0.6; hyprctl dispatch 'hl.dsp.window.center({ window = \"address:"
+            .. win.address .. "\" })'")
+    end
+end)
 
 -- Pen / note-taking apps: strip every compositor effect that adds frame latency.
 -- Window opacity (0.95 by default) is the important one -- a translucent window
@@ -58,9 +91,9 @@ hl.config({ general = { allow_tearing = true } })
 -- Auto-mount removable media. udiskie talks to udisks2 over D-Bus and relies on
 -- the polkit agent (started in execs.lua) to mount without prompting for a password.
 -- --no-tray because caelestia's bar owns the tray; notifications come from the shell.
--- guarded like the daemons below: hl.exec_cmd re-runs on every config reload (Hyprland
--- auto-reloads on each save), and the unguarded line had stacked up 29 copies.
-hl.exec_cmd("pgrep -x udiskie >/dev/null || udiskie --no-tray --automount --notify --file-manager thunar")
+-- pgrep-guarded: reloads re-run it (Hyprland auto-reloads on each save), and the
+-- unguarded version had stacked up 29 copies.
+daemon("pgrep -x udiskie >/dev/null || udiskie --no-tray --automount --notify --file-manager thunar")
 
 -- ===========================================================================
 -- 2-in-1 / tablet mode -- every block is gated on host.lua, so a desktop or a
@@ -80,16 +113,15 @@ end
 
 -- Auto-rotate: iio-hyprland listens to iio-sensor-proxy over D-Bus and rotates
 -- the panel together with the mapped input devices.
--- guarded: hl.exec_cmd fires on every config reload, which otherwise stacks copies
 if host.auto_rotate then
-    hl.exec_cmd("pgrep -x iio-hyprland >/dev/null || iio-hyprland")
+    daemon("pgrep -x iio-hyprland >/dev/null || iio-hyprland")
 end
 
 -- On-screen keyboard, started hidden. squeekboard was the wrong pick: it is built
 -- for Phosh, wants org.gnome.SessionManager, and only surfaces via input-method-v2.
 -- wvkbd is a plain wlroots layer-shell keyboard toggled with SIGUSR1/SIGUSR2.
 if host.osk then
-    hl.exec_cmd("pgrep -x wvkbd-mobintl >/dev/null || wvkbd-mobintl -L 320 --hidden")
+    daemon("pgrep -x wvkbd-mobintl >/dev/null || wvkbd-mobintl -L 320 --hidden")
     -- Manual OSK toggle, for when you want it without folding the screen.
     hl.bind("SUPER + SHIFT + K", hl.dsp.exec_cmd(bin .. "osk toggle"))
 end
@@ -140,9 +172,9 @@ for _, action in ipairs(custom_actions) do
         hl.bind(key, hl.dsp.exec_cmd(command), { description = action.label })
     end
 end
--- Keep the palette resident (hidden) so the first Super+K is instant too. Safe on
--- every config reload: `start` does nothing when it is already running.
-hl.exec_cmd(bin .. "caelestia-palette start")
+-- Keep the palette resident (hidden) so the first Super+K is instant too. `start`
+-- does nothing when it is already running.
+daemon(bin .. "caelestia-palette start")
 
 -- Swipe up to open or hide notes, mirroring swipe down for the scratchpad: the same
 -- workflow as Super+R. Upstream's gestures.lua gives this swipe to "show scratchpad",
