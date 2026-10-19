@@ -1,0 +1,7 @@
+# "Show in folder" (Firefox, Discord, GTK/Qt file dialogs) asks D-Bus for
+# org.freedesktop.FileManager1. Dolphin and Thunar both register that name and
+# D-Bus picked Dolphin; this user-level file wins over both, so it's Thunar,
+# matching mimeapps.list and Caelestia's Super+E.
+[D-BUS Service]
+Name=org.freedesktop.FileManager1
+Exec=/usr/bin/Thunar --gapplication-service

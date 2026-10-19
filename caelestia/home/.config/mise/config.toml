@@ -1,2 +1,2 @@
 [tools]
-node = "latest"
+node = "lts"  # LTS line: "latest" jumped major versions under nvim LSPs and projects
