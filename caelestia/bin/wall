@@ -5,6 +5,10 @@
 #   wall next|prev|random|list|current
 #   wall refresh      restart the caelestia shell so its Wallpapers UI re-indexes
 #   wall /path/to.jpg set an explicit file
+#   wall pin          remember the current colour scheme for the current wallpaper
+#   wall unpin        forget it again (back to automatic colours)
+#   wall pins         list pinned wallpapers
+#   wall hook         caelestia's wallpaper.postHook (cli.json) -- applies pins
 # A "collection" is a subdirectory of ~/Pictures/Wallpapers holding images.
 # Directories named "spares" and hidden ones (the folder's own .git) are ignored.
 set -euo pipefail
@@ -13,6 +17,63 @@ ROOT="${WALL_ROOT:-$HOME/Pictures/Wallpapers}"
 THUMBS="$HOME/.cache/wall-thumbs"
 STATE="$HOME/.local/state/caelestia/wallpaper/path.txt"
 mkdir -p "$THUMBS"
+
+# ---- per-wallpaper colour schemes (idea from caelestia-dots/cli#121) ------------
+# Pins map a wallpaper's file name to the scheme it should get. caelestia runs
+# `wall hook` after every wallpaper change -- from this script, the Nexus page or the
+# launcher -- so a pin applies however the wallpaper was set. Leaving a pinned
+# wallpaper for an unpinned one goes back to automatic (dynamic, smart) colours; a
+# scheme picked by hand without pinning is left alone.
+PINS="$HOME/.config/caelestia/wallpaper-schemes.json"   # tracked in ~/dotfiles
+ACTIVE="$HOME/.local/state/caelestia/wallpaper-pin-active"
+SCHEME_STATE="$HOME/.local/state/caelestia/scheme.json"
+
+pin_of () { [[ -s $PINS ]] && jq -ce --arg n "$1" '.[$n] // empty' "$PINS" 2>/dev/null || true; }
+# Write through the symlink into ~/dotfiles instead of replacing it.
+save_pins () { local t; t=$(mktemp); cat >"$t"; cat "$t" >"$PINS"; rm -f "$t"; }
+apply_pin () {
+  caelestia scheme set -n "$(jq -r .name <<<"$1")" -f "$(jq -r .flavour <<<"$1")" \
+    -m "$(jq -r .mode <<<"$1")" -v "$(jq -r .variant <<<"$1")" >/dev/null 2>&1
+}
+back_to_automatic () { # $1 = wallpaper; re-set it so caelestia's smart mode/variant apply
+  rm -f "$ACTIVE"
+  caelestia scheme set -n dynamic >/dev/null 2>&1
+  caelestia wallpaper -f "$1" >/dev/null 2>&1
+}
+toast () { notify-send -a Wallpaper "$@" 2>/dev/null || true; }
+
+case "${1:-}" in
+  hook)
+    w=${WALLPAPER_PATH:-$(cat "$STATE" 2>/dev/null)}; name=$(basename "$w")
+    if pin=$(pin_of "$name") && [[ -n $pin ]]; then
+      want=$(jq -r '"\(.name) \(.flavour) \(.mode) \(.variant)"' <<<"$pin")
+      have="${SCHEME_NAME:-} ${SCHEME_FLAVOUR:-} ${SCHEME_MODE:-} ${SCHEME_VARIANT:-}"
+      [[ $want == "$have" ]] || apply_pin "$pin"
+      mkdir -p "$(dirname "$ACTIVE")"; printf '%s\n' "$name" >"$ACTIVE"
+    elif [[ -s $ACTIVE ]]; then
+      back_to_automatic "$w"
+    fi
+    exit 0 ;;
+  pin)
+    w=$(cat "$STATE"); name=$(basename "$w")
+    s=$(jq -c '{name, flavour, mode, variant}' "$SCHEME_STATE")
+    [[ -s $PINS ]] || echo '{}' | save_pins
+    jq --arg n "$name" --argjson s "$s" '.[$n] = $s' "$PINS" | save_pins
+    mkdir -p "$(dirname "$ACTIVE")"; printf '%s\n' "$name" >"$ACTIVE"
+    label=$(jq -r '"\(.name) \(.flavour), \(.mode), \(.variant)"' <<<"$s")
+    echo "pinned $name -> $label"; toast "Colours pinned" "${name%.*} keeps: $label"
+    exit 0 ;;
+  unpin)
+    w=$(cat "$STATE"); name=$(basename "$w")
+    if [[ -z $(pin_of "$name") ]]; then echo "$name has no pinned scheme"; exit 0; fi
+    jq --arg n "$name" 'del(.[$n])' "$PINS" | save_pins
+    back_to_automatic "$w"
+    echo "unpinned $name"; toast "Colours unpinned" "${name%.*} is back to automatic colours"
+    exit 0 ;;
+  pins)
+    [[ -s $PINS ]] && jq -r 'to_entries[] | "\(.key)  ->  \(.value.name) \(.value.flavour), \(.value.mode), \(.value.variant)"' "$PINS"
+    exit 0 ;;
+esac
 
 SCOPE=""
 if [[ ${1:-} == -d || ${1:-} == --dir ]]; then
@@ -85,7 +146,8 @@ case "${1:-pick}" in
     # caelestia's recursive wallpaper index collapses to the most recently changed
     # directory whenever files are added or removed; only a restart rebuilds it fully.
     caelestia shell -k >/dev/null 2>&1 || true
-    until ! pgrep -x qs >/dev/null 2>&1; do :; done
+    # only the shell: the resident palette is a `qs` process too, and waiting on it hung
+    until ! pgrep -f '^qs -c caelestia( |$)' >/dev/null 2>&1; do sleep 0.1; done
     caelestia shell -d >/dev/null 2>&1
     until caelestia shell -s >/dev/null 2>&1; do :; done
     n=$(qs -c caelestia ipc call wallpaper list 2>/dev/null | wc -l)

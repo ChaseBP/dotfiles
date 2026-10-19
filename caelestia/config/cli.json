@@ -4,16 +4,31 @@
   },
   "toggles": {
     "todo": {
-      "todoist": { "enable": false }
+      "todoist": {
+        "enable": false
+      }
     },
     "music": {
-      "spotify": { "enable": false },
-      "feishin": { "enable": false }
+      "spotify": {
+        "enable": false
+      },
+      "feishin": {
+        "enable": false
+      }
     },
     "sysmon": {
       "btop": {
-        "command": ["ghostty", "--class=btop", "--title=btop", "-e", "btop"]
+        "command": [
+          "ghostty",
+          "--class=btop",
+          "--title=btop",
+          "-e",
+          "btop"
+        ]
       }
     }
+  },
+  "wallpaper": {
+    "postHook": "$HOME/.local/bin/wall hook"
   }
 }

@@ -380,7 +380,9 @@ def main():
                "notes-view": lambda: notes_view(*sys.argv[2:4]), "ocr": ocr,
                "projects": lambda: spawn(["ghostty", "-e", str(HOME/".local/bin/tmux-revive")]),
                "palette": lambda: palette_launcher("toggle"),
-               "notes-search": lambda: palette_launcher("show", "notes")}
+               "notes-search": lambda: palette_launcher("show", "notes"),
+               "wallpaper-pin": lambda: spawn([str(HOME/".local/bin/wall"), "pin"]),
+               "wallpaper-unpin": lambda: spawn([str(HOME/".local/bin/wall"), "unpin"])}
     # notes-open/notes-view take a note path and line; every other action takes nothing.
     arity = 4 if len(sys.argv) > 1 and sys.argv[1] in ("notes-open", "notes-view") else 2
     if len(sys.argv) != arity or sys.argv[1] not in actions:
