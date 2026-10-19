@@ -11,6 +11,12 @@ This repository focuses on a clean, reproducible setup with:
 
 Designed to be safe, minimal, and easy to reuse across machines.
 
+> **Branches.** This is the `wsl` branch: the dev environment only (zsh, Neovim,
+> tmux, tooling), for WSL or any Linux box. The CachyOS + Caelestia desktop lives
+> on the [`cachyos`](https://github.com/ChaseBP/dotfiles/tree/cachyos) branch,
+> which carries the same dev setup plus the desktop. Fixes to the shared parts
+> are made on both.
+
 ---
 
 ## ✨ What’s Included
@@ -87,7 +93,7 @@ dotfiles/
 One-liner on a fresh machine (clones to `~/dotfiles`, then installs):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ChaseBP/dotfiles/main/bootstrap.sh | bash
+curl -fsSL https://raw.githubusercontent.com/ChaseBP/dotfiles/wsl/bootstrap.sh | bash
 ```
 
 Or manually:
