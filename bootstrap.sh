@@ -8,8 +8,8 @@
 #
 #   curl -fsSL .../bootstrap.sh | bash -s -- --dry-run --skip nvim
 #
-# Each setup lives on its own branch — `wsl` (WSL / any Linux dev box) and
-# `cachyos` (the CachyOS + Caelestia desktop) — and this copy installs `wsl`.
+# Each setup lives on its own branch — `main` (the CachyOS + Caelestia desktop)
+# and `wsl` (WSL / any Linux dev box) — and this copy installs `wsl`.
 # Override the clone location/source/branch with DOTFILES_DIR / DOTFILES_REPO /
 # DOTFILES_BRANCH.
 # Uses HTTPS by default — a fresh box has no SSH keys yet; switch the remote
