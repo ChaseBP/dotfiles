@@ -56,8 +56,9 @@ the repo seeds it without monitors, so you start on preferred/auto/scale 1).
 paru prefers a repo provider over building from the AUR — so Caelestia ended up
 on Noctalia's Quickshell and died at startup (`Unrecognized pragma "DefaultEnv"`),
 leaving a black screen. The desktop step builds the real `quickshell-git` before
-anything can depend on it. (The Latitude still runs on `noctalia-qs`, held together by
-the forked `shell.qml`; the step prints how to switch.)
+anything can depend on it. (The Latitude ran on `noctalia-qs`, held together by the
+forked `shell.qml`, until it was switched on 2026-10-19; on a machine that still has it,
+the step prints how to switch.)
 
 **Hand-forked shell QML.** The network-UI and background forks are pinned against
 caelestia-shell 2.5.0; a newer version may not load them. `caelestia-shell-guard`
