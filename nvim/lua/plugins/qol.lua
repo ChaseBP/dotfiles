@@ -16,6 +16,25 @@ return {
       file_types = { 'markdown' },
       heading = { sign = false },
       code = { sign = false, width = 'block', right_pad = 1 },
+      pipe_table = { cell = 'padded', wrap = true },
+      -- Keep ordinary formatting visible under the cursor in Normal mode.
+      anti_conceal = { disabled_modes = { 'n' } },
+      win_options = {
+        wrap = { default = vim.o.wrap, rendered = true },
+        concealcursor = { default = vim.o.concealcursor, rendered = 'nc' },
+      },
+      -- Give :RenderMarkdown preview a clean reading layout.
+      overrides = {
+        preview = {
+          anti_conceal = { enabled = false },
+          win_options = {
+            number = { default = vim.o.number, rendered = false },
+            relativenumber = { default = vim.o.relativenumber, rendered = false },
+            signcolumn = { default = vim.o.signcolumn, rendered = 'no' },
+            list = { default = vim.o.list, rendered = false },
+          },
+        },
+      },
     },
   },
 
