@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # Zero-to-dotfiles on a fresh machine:
 #
-#   curl -fsSL https://raw.githubusercontent.com/ChaseBP/dotfiles/cachyos/bootstrap.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/ChaseBP/dotfiles/main/bootstrap.sh | bash
 #
 # Clones (or fast-forwards) the repo and hands off to install.sh. Installer
 # flags pass straight through:
 #
 #   curl -fsSL .../bootstrap.sh | bash -s -- --dry-run --skip nvim
 #
-# Each setup lives on its own branch — `wsl` (WSL / any Linux dev box) and
-# `cachyos` (the CachyOS + Caelestia desktop) — and this copy installs `cachyos`.
+# Each setup lives on its own branch — `main` (the CachyOS + Caelestia desktop)
+# and `wsl` (WSL / any Linux dev box) — and this copy installs `main`.
 # Override the clone location/source/branch with DOTFILES_DIR / DOTFILES_REPO /
 # DOTFILES_BRANCH.
 # Uses HTTPS by default — a fresh box has no SSH keys yet; switch the remote
@@ -18,7 +18,7 @@ set -euo pipefail
 
 REPO="${DOTFILES_REPO:-https://github.com/ChaseBP/dotfiles.git}"
 DIR="${DOTFILES_DIR:-$HOME/dotfiles}"
-BRANCH="${DOTFILES_BRANCH:-cachyos}"
+BRANCH="${DOTFILES_BRANCH:-main}"
 
 command -v git >/dev/null 2>&1 || {
   echo "❌ git is required — install it first (e.g. apt/dnf/pacman install git)" >&2
