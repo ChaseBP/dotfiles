@@ -440,7 +440,8 @@ def check_hyprland(report):
 
 def check_tests(report):
     failures = []
-    node = shutil.which("node")
+    # The login run inherits the session PATH, which has no mise; its shims do.
+    node = shutil.which("node") or shutil.which("node", path=str(Path.home() / ".local/share/mise/shims"))
     test = CONFIG / "palette/test_palette.mjs"
     if node and test.exists():
         result = run([node, "--test", str(test)], timeout=60)

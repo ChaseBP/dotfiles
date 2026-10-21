@@ -79,8 +79,10 @@ else
   priv ln -sfn "$OPT_DIR/nvim-linux-${NVIM_ARCH}/bin/nvim" "$BIN_DIR/nvim"
 fi
 
-# If another nvim shadows ours on PATH, point it out.
-if command -v nvim >/dev/null 2>&1 && [ "$(command -v nvim)" != "$BIN_DIR/nvim" ]; then
+# If another nvim shadows ours on PATH, point it out. (A link to this one, like the
+# ~/.local/bin/nvim the caelestia step pins, is the same nvim.)
+if command -v nvim >/dev/null 2>&1 \
+   && [ "$(readlink -f "$(command -v nvim)")" != "$(readlink -f "$BIN_DIR/nvim")" ]; then
   warn "another nvim is first on PATH: $(command -v nvim) (this one: $BIN_DIR/nvim)"
 fi
 
@@ -107,15 +109,27 @@ link_file "$DOTFILES_DIR/nvim" "$HOME/.config/nvim"
 
 # ------------------------------------------------------------------
 # 5. Bootstrap plugins + parsers (best effort; needs network)
+#    restore, not sync: install exactly the commits in the tracked lazy-lock.json.
+#    sync would update past them (an untested plugin set on a new machine) and
+#    rewrite the lockfile, leaving the repo dirty.
 # ------------------------------------------------------------------
 NVIM_BIN="$BIN_DIR/nvim"
 [ -x "$NVIM_BIN" ] || NVIM_BIN="$(command -v nvim || true)"
+# init.lua bootstraps lazy.nvim from its latest release, past the commit the lockfile
+# pins (and restore leaves lazy.nvim itself alone). Clone it at that commit first.
+LAZY_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/nvim/lazy/lazy.nvim"
+lazy_rev="$(sed -n 's/.*"lazy\.nvim": {[^}]*"commit": "\([0-9a-f]*\)".*/\1/p' "$DOTFILES_DIR/nvim/lazy-lock.json")"
+if ! dry && [ -n "$NVIM_BIN" ] && [ ! -d "$LAZY_DIR" ] && [ -n "$lazy_rev" ]; then
+  if retry 3 git clone --quiet --filter=blob:none https://github.com/folke/lazy.nvim.git "$LAZY_DIR"; then
+    git -C "$LAZY_DIR" checkout --quiet "$lazy_rev" || warn "lazy.nvim: locked commit $lazy_rev not found — using its latest"
+  fi
+fi
 if dry; then
-  info "   [dry-run] would bootstrap plugins (Lazy sync + TSUpdate)"
-elif [ -n "$NVIM_BIN" ] && "$NVIM_BIN" --headless "+Lazy! sync" +qa 2>/dev/null; then
+  info "   [dry-run] would bootstrap plugins (Lazy restore + TSUpdate)"
+elif [ -n "$NVIM_BIN" ] && "$NVIM_BIN" --headless "+Lazy! restore" +qa 2>/dev/null; then
   "$NVIM_BIN" --headless "+TSUpdate" "+sleep 5" +qa 2>/dev/null || true
 else
-  warn "plugin bootstrap skipped (offline?). Run inside nvim:  :Lazy sync  then  :TSUpdate"
+  warn "plugin bootstrap skipped (offline?). Run inside nvim:  :Lazy restore  then  :TSUpdate"
 fi
 
 # ------------------------------------------------------------------

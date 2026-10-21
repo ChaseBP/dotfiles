@@ -159,10 +159,18 @@ else
   if dry; then
     info "   [dry-run] caelestia install --noconfirm --aur-helper paru --enable-components $CAELESTIA_COMPONENTS"
   else
-    # Outside Hyprland (Konsole in Plasma), hide the display from its hooks: they would
-    # otherwise start the Caelestia bar on top of Plasma. They just warn instead.
+    # Outside Hyprland (Konsole in Plasma, a TTY), its hooks would start the Caelestia
+    # bar on top of Plasma; with the display hidden, Qt aborts instead and leaves core
+    # dumps. So hide the display and stand in no-op qs/hyprctl for the hooks — the
+    # first Hyprland login starts the shell anyway.
     hide=()
-    [ -z "${HYPRLAND_INSTANCE_SIGNATURE:-}" ] && hide=(env -u WAYLAND_DISPLAY -u DISPLAY)
+    if [ -z "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]; then
+      mkdir -p "$PARU_TMP/nohooks"
+      printf '#!/bin/sh\nexit 0\n' >"$PARU_TMP/nohooks/qs"
+      cp "$PARU_TMP/nohooks/qs" "$PARU_TMP/nohooks/hyprctl"
+      chmod +x "$PARU_TMP/nohooks/qs" "$PARU_TMP/nohooks/hyprctl"
+      hide=(env -u WAYLAND_DISPLAY -u DISPLAY PATH="$PARU_TMP/nohooks:$PATH")
+    fi
     "${hide[@]}" caelestia install --noconfirm --aur-helper paru --enable-components "$CAELESTIA_COMPONENTS" \
       || die "caelestia install failed — fix the error above, then re-run: ./install.sh --only desktop,caelestia"
   fi

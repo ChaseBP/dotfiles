@@ -266,8 +266,21 @@ if [ -d "$WALLS" ] && { [ -z "$current_wall" ] || [ ! -f "$current_wall" ]; }; t
   [ -f "$first" ] || first="$(find "$WALLS" -maxdepth 1 -type f \( -iname '*.jpg' -o -iname '*.png' -o -iname '*.webp' \) | sort | head -1)"
   if [ -n "$first" ]; then
     hide=(); [ -z "${HYPRLAND_INSTANCE_SIGNATURE:-}" ] && hide=(env -u WAYLAND_DISPLAY -u DISPLAY)
-    run "${hide[@]}" caelestia wallpaper -f "$first" >/dev/null 2>&1 \
-      && ok "wallpaper set: $(basename "$first")" || warn "couldn't set a wallpaper — pick one with: wall"
+    if run "${hide[@]}" caelestia wallpaper -f "$first" >/dev/null 2>&1; then
+      ok "wallpaper set: $(basename "$first")"
+      # Never had a wallpaper = fresh machine, still on upstream's static "caelestia"
+      # scheme. Switch to colours from the wallpaper ("hard" flavour, as on the laptop);
+      # dynamic needs a wallpaper set first, and setting it again applies the smart
+      # light/dark + variant choice.
+      if [ -z "$current_wall" ]; then
+        run "${hide[@]}" caelestia scheme set -n dynamic -f hard >/dev/null 2>&1 \
+          && run "${hide[@]}" caelestia wallpaper -f "$first" >/dev/null 2>&1 \
+          && ok "colour scheme: dynamic (from the wallpaper)" \
+          || warn "couldn't switch to wallpaper colours — later: caelestia scheme set -n dynamic"
+      fi
+    else
+      warn "couldn't set a wallpaper — pick one with: wall"
+    fi
   fi
 fi
 
