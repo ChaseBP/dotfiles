@@ -49,8 +49,9 @@ grep -qi cachyos /etc/os-release || warn "not CachyOS — continuing, but only C
 
 # A second, independent desktop session is the safety net. Hyprland sessions don't
 # count: Noctalia and Caelestia both live in the same ~/.config/hypr.
+# (|| true: under pipefail, grep finding no other session would end the script here)
 fallback=$(find /usr/share/wayland-sessions /usr/share/xsessions -name '*.desktop' 2>/dev/null \
-  | grep -viE 'hyprland|uwsm' | head -1)
+  | grep -viE 'hyprland|uwsm' | head -1 || true)
 if [ -n "$fallback" ]; then
   ok "fallback session available: $(sed -n 's/^Name=//p' "$fallback" | head -1)"
 else
@@ -63,7 +64,13 @@ eval "$("$DOTFILES_DIR/scripts/detect_hw.sh")"
 [ "${WITH_XPPEN:-0}" = 1 ] && HW_XPPEN=1
 info "   hardware: ${HW_PRODUCT} · gpu: ${HW_GPUS:-?} · laptop=$HW_LAPTOP touch=$HW_TOUCH accel=$HW_ACCEL hinge=${HW_TABLET_SWITCH:+yes} xppen=$HW_XPPEN"
 
+# Package lists: one name per line, '#' comments. Read into arrays (names never
+# contain spaces, but word-splitting command output is how lists get mangled).
 list() { grep -hv '^\s*#' "$@" | awk 'NF { print $1 }'; }
+mapfile -t PKGS_REPO  < <(list "$PKG/repo.txt")
+mapfile -t PKGS_AUR   < <(list "$PKG/aur.txt")
+mapfile -t PKGS_2IN1  < <(list "$PKG/2in1.txt")
+mapfile -t PKGS_XPPEN < <(list "$PKG/xppen.txt")
 
 # One sudo prompt for the whole run: long AUR builds otherwise outlive sudo's
 # timestamp and stop mid-way to ask again. PARU_CONF also reaches the paru calls
@@ -73,7 +80,9 @@ trap 'rm -rf "$PARU_TMP"' EXIT
 { cat /etc/paru.conf 2>/dev/null || echo "[options]"; } \
   | sed '/^\[options\]/a SudoLoop\nSkipReview' >"$PARU_TMP/paru.conf"
 export PARU_CONF="$PARU_TMP/paru.conf"
-paru_s() { run paru -S --needed --noconfirm "$@"; }
+# Retried once: AUR builds download sources from all over (GitHub, sourceforge, ...)
+# and one dropped connection shouldn't fail the whole step.
+paru_s() { retry 2 run paru -S --needed --noconfirm "$@"; }
 
 # Ask for the password now, while the user is still watching the terminal.
 dry || sudo -v
@@ -84,22 +93,24 @@ dry || sudo -v
 # Never install against a stale package database: CachyOS rebuilds often and drops
 # old files from the mirrors (404s mid-install), and AUR builds must link against
 # current libraries. -Syu, never a partial -Sy. SKIP_UPGRADE=1 to opt out.
-if [ -z "${SKIP_UPGRADE:-}" ]; then
+if [ -n "${DOTFILES_UPGRADED:-}" ]; then
+  ok "system already upgraded by install.sh"
+elif [ -z "${SKIP_UPGRADE:-}" ]; then
   info "⬆  Full system upgrade first..."
-  as_root pacman -Syu --noconfirm
+  retry 2 as_root pacman -Syu --noconfirm
 fi
 if ! command -v paru >/dev/null 2>&1; then
   info "📦 Installing paru (CachyOS repo)..."
   as_root pacman -S --needed --noconfirm paru
 fi
 info "📦 Repo packages..."
-paru_s --repo $(list "$PKG/repo.txt")
+paru_s --repo "${PKGS_REPO[@]}"
 
 # AUR signing keys, fetched over HTTPS before paru needs them: gpg's own keyserver
 # fetch times out on some networks, and under --noconfirm that kills the install.
-aur_wanted=(quickshell-git caelestia-cli $(list "$PKG/aur.txt"))
-{ [ -n "$HW_TABLET_SWITCH" ] || [ "$HW_ACCEL" = 1 ]; } && aur_wanted+=($(list "$PKG/2in1.txt"))
-[ "$HW_XPPEN" = 1 ] && aur_wanted+=($(list "$PKG/xppen.txt"))
+aur_wanted=(quickshell-git caelestia-cli "${PKGS_AUR[@]}")
+{ [ -n "$HW_TABLET_SWITCH" ] || [ "$HW_ACCEL" = 1 ]; } && aur_wanted+=("${PKGS_2IN1[@]}")
+[ "$HW_XPPEN" = 1 ] && aur_wanted+=("${PKGS_XPPEN[@]}")
 if dry; then
   info "   [dry-run] would pre-import AUR signing keys for: ${aur_wanted[*]} + Caelestia's components"
 else
@@ -161,11 +172,11 @@ fi
 # 4. AUR extras + hardware extras
 # ------------------------------
 info "📦 AUR packages..."
-paru_s --aur $(list "$PKG/aur.txt")
+paru_s --aur "${PKGS_AUR[@]}"
 
 if [ -n "$HW_TABLET_SWITCH" ] || [ "$HW_ACCEL" = 1 ]; then
   info "🔄 2-in-1 hardware: auto-rotate + on-screen keyboard"
-  paru_s $(list "$PKG/2in1.txt")
+  paru_s "${PKGS_2IN1[@]}"
 fi
 
 if [ "$HW_XPPEN" = 1 ]; then
@@ -174,7 +185,7 @@ if [ "$HW_XPPEN" = 1 ]; then
     ok "XP-Pen driver already installed by hand (/usr/lib/pentablet) — leaving it"
   else
     info "🖊  XP-Pen tablet: official driver"
-    paru_s --aur $(list "$PKG/xppen.txt")
+    paru_s --aur "${PKGS_XPPEN[@]}"
   fi
 fi
 
@@ -204,7 +215,8 @@ fi
 # ~/.config/environment.d/10-locale.conf (seeded by the caelestia step) sets
 # LANG/LC_ALL=en_IN.UTF-8; a locale that isn't generated breaks every app's
 # locale setup, and the CachyOS installer only generates the one you picked.
-if ! locale -a 2>/dev/null | grep -qix 'en_IN.utf8'; then
+locales="$(locale -a 2>/dev/null || true)"
+if ! grep -qix 'en_IN.utf8' <<<"$locales"; then
   as_root sed -i 's/^#\s*en_IN UTF-8/en_IN UTF-8/' /etc/locale.gen
   grep -q '^en_IN UTF-8' /etc/locale.gen || as_root sh -c 'echo "en_IN UTF-8" >> /etc/locale.gen'
   as_root locale-gen >/dev/null
@@ -212,7 +224,7 @@ if ! locale -a 2>/dev/null | grep -qix 'en_IN.utf8'; then
 fi
 
 # input group: ydotool (Caelestia "tools") and the XP-Pen driver both write /dev/uinput.
-if id -nG "$USER" | tr ' ' '\n' | grep -qx input; then
+if [[ " $(id -nG "$USER") " == *" input "* ]]; then
   ok "$USER already in the input group"
 else
   as_root usermod -aG input "$USER"

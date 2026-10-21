@@ -21,18 +21,18 @@ else
 fi
 
 # --------------------------------------------------
-# 2. Install Oh My Zsh (clone-only, no auto-run)
+# 2. Install Oh My Zsh — a plain clone. Its online installer writes its own
+#    ~/.zshrc template (moved aside again below) and, if the download fails,
+#    exits 0 having installed nothing, leaving .zshrc sourcing a missing file.
 # --------------------------------------------------
 if [ -d "$HOME/.oh-my-zsh" ]; then
   ok "Oh My Zsh already installed"
 elif ! command -v zsh >/dev/null 2>&1; then
   warn "skipping Oh My Zsh (needs zsh)"
-elif dry; then
-  info "   [dry-run] would install Oh My Zsh"
 else
   info "✨ Installing Oh My Zsh..."
-  RUNZSH=no CHSH=no sh -c \
-    "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)"
+  retry 3 run git clone --depth 1 https://github.com/ohmyzsh/ohmyzsh.git "$HOME/.oh-my-zsh" \
+    || die "could not clone Oh My Zsh (network?) — re-run: ./install.sh --only zsh"
 fi
 
 # --------------------------------------------------
@@ -68,22 +68,31 @@ if [ -d "$HOME/.oh-my-zsh" ]; then
       ok "$plugin already installed"
     else
       info "🔌 Installing $plugin..."
-      run git clone --depth 1 "${plugins[$plugin]}" "$ZSH_CUSTOM/plugins/$plugin"
+      retry 3 run git clone --depth 1 "${plugins[$plugin]}" "$ZSH_CUSTOM/plugins/$plugin" \
+        || warn "could not clone $plugin — zsh works without it; re-run ./install.sh --only zsh later"
     fi
   done
 fi
 
 # --------------------------------------------------
-# 6. Set zsh as default shell (chsh asks for the user's own password;
-#    failing is non-fatal — e.g. containers without a real login shell)
+# 6. Make zsh the login shell. Compare against the user database, not $SHELL:
+#    a running desktop session keeps the old value until the next login. Via sudo
+#    when available (already unlocked by install.sh — no second password prompt);
+#    plain chsh asks for your password. Non-fatal either way (e.g. containers).
 # --------------------------------------------------
-if ! command -v zsh >/dev/null 2>&1; then
+ZSH_BIN="$(command -v zsh 2>/dev/null || true)"
+LOGIN_SHELL="$(getent passwd "$USER" 2>/dev/null | cut -d: -f7)"
+if [ -z "$ZSH_BIN" ]; then
   :
-elif [ "${SHELL:-}" != "$(command -v zsh)" ]; then
-  info "🔁 Setting zsh as default shell"
-  run chsh -s "$(command -v zsh)" || warn "chsh failed — run manually: chsh -s $(command -v zsh)"
+elif [ "$LOGIN_SHELL" = "$ZSH_BIN" ] || [ "$(readlink -f "$LOGIN_SHELL" 2>/dev/null)" = "$(readlink -f "$ZSH_BIN")" ]; then
+  ok "zsh already the login shell"
 else
-  ok "zsh already the default shell"
+  info "🔁 Setting zsh as the login shell (was: ${LOGIN_SHELL:-unknown})"
+  if can_root; then
+    as_root chsh -s "$ZSH_BIN" "$USER" || warn "chsh failed — run manually: chsh -s $ZSH_BIN"
+  else
+    run chsh -s "$ZSH_BIN" || warn "chsh failed — run manually: chsh -s $ZSH_BIN"
+  fi
 fi
 
 ok "Zsh setup complete"

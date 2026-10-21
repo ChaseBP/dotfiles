@@ -23,14 +23,17 @@ sudo pacman -S --needed git
 curl -fsSL https://raw.githubusercontent.com/ChaseBP/dotfiles/main/bootstrap.sh | bash
 ```
 
-It asks for your password once, up front, and keeps sudo alive through the
-AUR builds. What happens, in order (`./install.sh --list`):
+It asks for your password **once**, up front, and keeps sudo alive for the whole
+run (about 45 minutes, mostly AUR builds), so you can walk away. It needs the
+internet throughout, upgrades the system first, retries flaky downloads, and
+writes a full log to `~/.local/state/dotfiles/install-<date>.log`. What happens,
+in order (`./install.sh --list`):
 
 | step | does |
 | --- | --- |
-| zsh / deps / nvim / tmux | the cross-distro dev setup (same as on WSL) |
+| zsh / deps / nvim / tmux | the cross-distro dev setup (same as on WSL): zsh + Oh My Zsh as login shell, Node LTS via mise, Neovim + plugins, tmux + plugins |
 | desktop | repo + AUR packages, **real `quickshell-git` first**, `caelestia install`, /etc tweaks, groups, services |
-| caelestia | personal layer: config, palette, forks (guarded), app configs, `host.lua`, OCR model |
+| caelestia | personal layer: config, palette, forks (guarded), app configs, `host.lua`, OCR model, wallpapers (cloned + one set), avatar |
 
 Re-running is always safe; a failed step is retried with `./install.sh --only <step>`.
 
@@ -39,10 +42,12 @@ Re-running is always safe; a failed step is retried with `./install.sh --only <s
 The login screen remembers the last session. Then:
 
 ```bash
-# wallpapers live in a private repo — after adding this machine's SSH key to GitHub:
-git clone git@github.com:ChaseBP/dotfiles-wallpaper.git ~/Pictures/Wallpapers && wall refresh
 caelestia-doctor          # should be all green
 ```
+
+The wallpapers are already there (cloned over HTTPS from the public
+`ChaseBP/dotfiles-wallpaper`). To push new ones from this machine, add its SSH key
+to GitHub and run `git -C ~/Pictures/Wallpapers remote set-url origin git@github.com:ChaseBP/dotfiles-wallpaper.git`.
 
 Set monitor layout/scale in **HyprMod** (it writes `~/.config/hypr/hyprland-gui.lua`;
 the repo seeds it without monitors, so you start on preferred/auto/scale 1).

@@ -10,7 +10,7 @@ This repository focuses on a clean, reproducible setup with:
 - Neovim (Kickstart-based config)
 - tmux + TPM
 - Caelestia (Hyprland + Quickshell) personal layer, incl. a Super+K shortcut palette
-- Node.js (via NVM) and Python venv for editor tooling
+- Node.js (LTS via mise) and Python venv for editor tooling
 
 Designed to be safe, minimal, and easy to reuse across machines.
 
@@ -29,7 +29,7 @@ Designed to be safe, minimal, and easy to reuse across machines.
 - Oh My Zsh
 - `zsh-autosuggestions`
 - `zsh-syntax-highlighting`
-- NVM auto-loaded
+- mise activated (Node LTS from `mise/config.toml`)
 
 ### Neovim
 
@@ -78,7 +78,7 @@ config on top and never touches `~/.config/hypr`.
   pinning, auto-rotate, on-screen keyboard, NVIDIA env — off on other machines
 - Helper scripts (`wall`, `osk`, `xppen-tablet`, `cliphist-store`) and XP-Pen
   Deco 640 fixes (tray shim, libinput-ignore udev rule), only with the tablet
-- Wallpapers: private repo `ChaseBP/dotfiles-wallpaper`, cloned by hand
+- Wallpapers: public repo `ChaseBP/dotfiles-wallpaper`, cloned by the installer
 - Everything symlinked per file; originals kept as `*.pre-dotfiles`
 - Tests: `node --test caelestia/config/palette/test_palette.mjs`,
   `python3 -m unittest discover -s caelestia/tests`,
@@ -86,7 +86,7 @@ config on top and never touches `~/.config/hypr`.
 
 ### Tooling Dependencies
 
-- Node.js (LTS via NVM)
+- Node.js (LTS via mise)
 - npm
 - Python 3 + `python3-venv`
 
@@ -113,13 +113,16 @@ dotfiles/
 ├── tmux/
 │   └── tmux.conf
 │
+├── mise/
+│   └── config.toml   # → ~/.config/mise (Node LTS; linked by the deps step)
+│
 ├── caelestia/
 │   ├── config/        # → ~/.config/caelestia
 │   ├── quickshell/    # → ~/.config/quickshell/caelestia (forks only)
 │   ├── quickshell-base/  # upstream originals the forks are tracked against
 │   ├── bin/           # → ~/.local/bin (incl. caelestia-doctor, caelestia-palette)
 │   ├── tests/         # caelestia-doctor tests
-│   ├── home/          # → ~ (ghostty, atuin, mise, uwsm env)
+│   ├── home/          # → ~ (ghostty, atuin, uwsm env, fontconfig, FileManager1 → Thunar)
 │   ├── seed/          # copied once (HyprMod settings, mimeapps, locale, cursor)
 │   ├── packages/      # repo / aur / 2in1 / xppen package lists
 │   ├── xppen/         # XP-Pen launcher + autostart mask (tablet only)
@@ -190,13 +193,9 @@ source ~/.zshrc
 
 ## 🔁 tmux Plugins
 
-After launching tmux for the first time:
-
-```
-Prefix + I
-```
-
-This installs all tmux plugins via TPM. `install_tmux.sh` already clones
+`install_tmux.sh` installs every plugin in `tmux.conf` through TPM's CLI, so
+they work on first launch. Added a plugin later? `Prefix + I` installs it.
+It also clones
 [tmux-revive](https://github.com/ChaseBP/tmux-revive) so its bindings work
 before you get to that.
 
@@ -220,7 +219,7 @@ Full docs in [the plugin's README](https://github.com/ChaseBP/tmux-revive).
 
 ## 📝 Notes
 
-- Node.js is installed via **NVM**, not system packages
+- Node.js is installed via **mise** (`mise/config.toml`), not system packages
 - Windows Terminal theming is configured manually
 - Neovim, tmux and Caelestia configs are symlinked from this repo
 

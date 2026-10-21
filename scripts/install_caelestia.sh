@@ -134,13 +134,23 @@ GUARD="$HOME/.local/bin/caelestia-shell-guard"
 if [ ! -d "$QS_PKG" ]; then
   warn "caelestia-shell is not installed ($QS_PKG missing) — skipping the shell forks"
 else
-  if [ ! -d "$QS_DIR" ]; then
-    info "🔗 Building the Quickshell symlink farm..."
-    while IFS= read -r rel; do
-      run mkdir -p "$(dirname "$QS_DIR/$rel")"
-      run ln -s "$QS_PKG/$rel" "$QS_DIR/$rel"
-    done < <(cd "$QS_PKG" && find . -type f -printf '%P\n' | sort)
+  # Build the farm, or reconcile it on a re-run: a caelestia-shell update adds and
+  # removes package files, and a farm missing a new one fails with "X is not a type".
+  [ -d "$QS_DIR" ] && info "🔗 Reconciling the Quickshell symlink farm..." || info "🔗 Building the Quickshell symlink farm..."
+  added=0
+  while IFS= read -r rel; do
+    [ -e "$QS_DIR/$rel" ] || [ -L "$QS_DIR/$rel" ] && continue
+    run mkdir -p "$(dirname "$QS_DIR/$rel")"
+    run ln -s "$QS_PKG/$rel" "$QS_DIR/$rel"
+    added=$((added + 1))
+  done < <(cd "$QS_PKG" && find . -type f -printf '%P\n' | sort)
+  removed=0
+  if [ -d "$QS_DIR" ]; then
+    while IFS= read -r link; do
+      case "$(readlink "$link")" in "$QS_PKG"/*) run rm -f "$link"; removed=$((removed + 1)) ;; esac
+    done < <(find "$QS_DIR" -xtype l)
   fi
+  ok "farm: $added link(s) added, $removed dangling removed"
   if [ -s "${XDG_STATE_HOME:-$HOME/.local/state}/caelestia/forks-reverted" ]; then
     # The guard switched them off after they failed to load; don't undo that blindly.
     warn "forks were reverted to stock after failing to load — left that way."
@@ -161,15 +171,27 @@ fi
 # ------------------------------
 # 5. App configs
 # ------------------------------
-info "🔗 Linking app configs (ghostty, atuin, mise, uwsm)..."
+info "🔗 Linking app configs (ghostty, atuin, uwsm, fontconfig, file manager)..."
 link_tree "$SRC/home" "$HOME"
 info "🌱 Seeding app-owned files (HyprMod settings, default apps, locale, cursor)..."
 seed_tree "$SRC/seed" "$HOME"
 
 # One monospace font everywhere: fontconfig's alias (caelestia/home/.config/fontconfig)
 # covers Firefox and Qt; GTK/GNOME apps read their own setting.
-if command -v gsettings >/dev/null 2>&1 && fc-list : family | grep -q "JetBrainsMono Nerd Font"; then
+# (Captured first: under pipefail, `fc-list | grep -q` can fail when grep exits early.)
+fonts="$(fc-list : family 2>/dev/null || true)"
+if command -v gsettings >/dev/null 2>&1 && [[ $fonts == *"JetBrainsMono Nerd Font"* ]]; then
   run gsettings set org.gnome.desktop.interface monospace-font-name 'JetBrainsMono Nerd Font 11'
+fi
+
+# The avatar for the login screen too (Caelestia itself reads ~/.face): registering
+# it with AccountsService needs no root for your own account. Best effort.
+if [ -f "$HOME/.face" ] && ! dry && command -v busctl >/dev/null 2>&1; then
+  user_obj=$(busctl call org.freedesktop.Accounts /org/freedesktop/Accounts \
+    org.freedesktop.Accounts FindUserByName s "$USER" 2>/dev/null | awk '{print $2}' | tr -d '"')
+  [ -n "$user_obj" ] && busctl call org.freedesktop.Accounts "$user_obj" \
+    org.freedesktop.Accounts.User SetIconFile s "$HOME/.face" >/dev/null 2>&1 \
+    && ok "avatar registered for the login screen"
 fi
 
 # Thunar's "Open terminal here" action ships pointing at foot.
@@ -221,14 +243,32 @@ if [ "$HW_XPPEN" = 1 ]; then
 fi
 
 # ------------------------------
-# 8. Wallpapers (private repo, cloned by hand — needs your GitHub SSH key)
+# 8. Wallpapers (public repo, so plain HTTPS — no SSH key needed on a new machine)
 # ------------------------------
 WALLS="$HOME/Pictures/Wallpapers"
+WALLS_REPO="${WALLPAPERS_REPO:-https://github.com/ChaseBP/dotfiles-wallpaper.git}"
+DEFAULT_WALLPAPER="${DEFAULT_WALLPAPER:-ghibli-style-forest-traveler-tree-guardian.jpg}"
 if [ -d "$WALLS/.git" ]; then
   ok "wallpapers present"
+elif [ -e "$WALLS" ] && [ -n "$(ls -A "$WALLS" 2>/dev/null)" ]; then
+  warn "$WALLS has files but isn't the wallpaper repo — leaving it alone"
 else
-  info "🖼  Wallpapers are in a private repo. Once your SSH key is on GitHub:"
-  info "      git clone git@github.com:ChaseBP/dotfiles-wallpaper.git ~/Pictures/Wallpapers && wall refresh"
+  info "🖼  Cloning wallpapers (~150 MB)..."
+  run rmdir "$WALLS" 2>/dev/null || true
+  retry 3 run git clone --depth 1 "$WALLS_REPO" "$WALLS" \
+    || warn "wallpaper clone failed — later: git clone $WALLS_REPO ~/Pictures/Wallpapers"
+fi
+# A first wallpaper, so a fresh session doesn't open on "Wallpaper missing?". Also
+# generates the colour scheme from it (and runs the pin hook).
+current_wall="$(cat "$HOME/.local/state/caelestia/wallpaper/path.txt" 2>/dev/null || true)"
+if [ -d "$WALLS" ] && { [ -z "$current_wall" ] || [ ! -f "$current_wall" ]; }; then
+  first="$WALLS/$DEFAULT_WALLPAPER"
+  [ -f "$first" ] || first="$(find "$WALLS" -maxdepth 1 -type f \( -iname '*.jpg' -o -iname '*.png' -o -iname '*.webp' \) | sort | head -1)"
+  if [ -n "$first" ]; then
+    hide=(); [ -z "${HYPRLAND_INSTANCE_SIGNATURE:-}" ] && hide=(env -u WAYLAND_DISPLAY -u DISPLAY)
+    run "${hide[@]}" caelestia wallpaper -f "$first" >/dev/null 2>&1 \
+      && ok "wallpaper set: $(basename "$first")" || warn "couldn't set a wallpaper — pick one with: wall"
+  fi
 fi
 
 ok "Caelestia setup complete"

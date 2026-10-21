@@ -13,9 +13,23 @@
 [ -n "${DOTFILES_LIB_LOADED:-}" ] && return 0
 DOTFILES_LIB_LOADED=1
 
+# Never fail silently: when `set -e` ends a step, say where and what. (A grep
+# that matched nothing inside $(...) under pipefail once killed a whole step
+# with no output at all.)
+set -E
+trap 'rc=$?; printf "❌ %s:%s: \`%s\` exited %s\n" "${BASH_SOURCE[0]##*/}" "$LINENO" "$BASH_COMMAND" "$rc" >&2' ERR
+
 # Repo root — every path in the step scripts hangs off this, so they work
 # from any CWD (linking from $PWD was how half-installs used to happen).
+# shellcheck disable=SC2034  # used by the step scripts that source this file
 DOTFILES_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# Tools installed by an earlier step (mise and its node, a source-built tmux,
+# ~/.local/bin links) must be visible to later steps in the same run, before any
+# shell profile has been re-read.
+case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) PATH="$HOME/.local/bin:$PATH" ;; esac
+case ":$PATH:" in *":$HOME/.local/share/mise/shims:"*) ;; *) PATH="$HOME/.local/share/mise/shims:$PATH" ;; esac
+export PATH
 
 info() { printf '%s\n' "$*"; }
 ok()   { printf '✔  %s\n' "$*"; }
@@ -29,6 +43,17 @@ dry() { [ -n "${DRY_RUN:-}" ]; }
 # still take the real branches.
 run() {
   if dry; then printf '   [dry-run] %s\n' "$*"; else "$@"; fi
+}
+
+# Run a command up to $1 times, pausing between tries: for network operations
+# (git clone, curl, AUR builds) where one dropped connection shouldn't fail a step.
+retry() { # $1=attempts, rest=command
+  local n=$1 i; shift
+  for ((i = 1; i <= n; i++)); do
+    "$@" && return 0
+    [ "$i" -lt "$n" ] && { warn "attempt $i/$n failed: $* — retrying in 5s"; sleep 5; }
+  done
+  return 1
 }
 
 # Run as root: directly when already root, via sudo when allowed + available,
