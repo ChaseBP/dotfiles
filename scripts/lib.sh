@@ -17,6 +17,7 @@ DOTFILES_LIB_LOADED=1
 # that matched nothing inside $(...) under pipefail once killed a whole step
 # with no output at all.)
 set -E
+# shellcheck disable=SC2154  # rc is assigned inside the trap string itself
 trap 'rc=$?; printf "❌ %s:%s: \`%s\` exited %s\n" "${BASH_SOURCE[0]##*/}" "$LINENO" "$BASH_COMMAND" "$rc" >&2' ERR
 
 # Repo root — every path in the step scripts hangs off this, so they work

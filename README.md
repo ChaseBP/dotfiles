@@ -175,8 +175,11 @@ Useful flags:
 The installer detects apt/dnf/pacman, backs up any real config file it
 replaces (`*.pre-dotfiles`), and a failed step doesn't abort the rest —
 the summary tells you what to retry. Existing configs are symlinked, so
-re-running is always safe. macOS isn't supported (the scripts assume
-bash ≥ 4 and GNU tools).
+re-running is always safe. It asks for your password once (sudo stays
+alive for the run), installs Neovim plugins at exactly the commits in
+`lazy-lock.json`, and logs everything to
+`~/.local/state/dotfiles/install-<date>.log`. macOS isn't supported (the
+scripts assume bash ≥ 4 and GNU tools).
 
 Machine-specific shell config (JAVA_HOME, extra PATHs, ssh-agent, …)
 belongs in `~/.zshrc.local` — sourced by the tracked `.zshrc`, never
