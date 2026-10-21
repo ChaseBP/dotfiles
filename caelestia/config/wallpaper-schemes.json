@@ -1,1 +1,14 @@
-{}
+{
+  "minimalist-torii-gate-misty-mountains.jpg": {
+    "name": "dynamic",
+    "flavour": "hard",
+    "mode": "light",
+    "variant": "content"
+  },
+  "ink-02-hanfu-portrait-light.png": {
+    "name": "dynamic",
+    "flavour": "hard",
+    "mode": "light",
+    "variant": "neutral"
+  }
+}
