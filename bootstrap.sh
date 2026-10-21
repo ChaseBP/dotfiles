@@ -27,9 +27,10 @@ command -v git >/dev/null 2>&1 || {
 
 if [ -d "$DIR/.git" ]; then
   echo "↻  updating existing clone at $DIR ($BRANCH)"
-  git -C "$DIR" fetch origin "$BRANCH" && git -C "$DIR" checkout "$BRANCH" && git -C "$DIR" pull --ff-only || {
-    echo "⚠  pull failed (local changes or diverged history) — continuing with what's there" >&2
-  }
+  if ! { git -C "$DIR" fetch origin "$BRANCH" && git -C "$DIR" checkout "$BRANCH" \
+         && git -C "$DIR" pull --ff-only; }; then
+    echo "⚠  update failed (local changes or diverged history) — continuing with what's there" >&2
+  fi
 elif [ -e "$DIR" ]; then
   echo "❌ $DIR exists but isn't a git clone — move it aside or set DOTFILES_DIR" >&2
   exit 1
@@ -38,4 +39,9 @@ else
   git clone --branch "$BRANCH" "$REPO" "$DIR"
 fi
 
+# Under `curl ... | bash` our stdin is the (finished) download, not the keyboard:
+# hand the installer the terminal so its prompts (sudo password, chsh) can read it.
+if [ ! -t 0 ] && { : </dev/tty; } 2>/dev/null; then
+  exec "$DIR/install.sh" "$@" </dev/tty
+fi
 exec "$DIR/install.sh" "$@"

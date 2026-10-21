@@ -7,7 +7,7 @@ This repository focuses on a clean, reproducible setup with:
 - Zsh + Oh My Zsh
 - Neovim (Kickstart-based config)
 - tmux + TPM
-- Node.js (via NVM) and Python venv for editor tooling
+- Node.js (LTS via mise) and Python venv for editor tooling
 
 Designed to be safe, minimal, and easy to reuse across machines.
 
@@ -27,7 +27,7 @@ Designed to be safe, minimal, and easy to reuse across machines.
 - Oh My Zsh
 - `zsh-autosuggestions`
 - `zsh-syntax-highlighting`
-- NVM auto-loaded
+- mise activated (Node LTS from `mise/config.toml`)
 
 ### Neovim
 
@@ -48,7 +48,7 @@ Designed to be safe, minimal, and easy to reuse across machines.
 
 ### Tooling Dependencies
 
-- Node.js (LTS via NVM)
+- Node.js (LTS via [mise](https://mise.jdx.dev))
 - npm
 - Python 3 + `python3-venv`
 
@@ -74,6 +74,9 @@ dotfiles/
 │
 ├── tmux/
 │   └── tmux.conf
+│
+├── mise/
+│   └── config.toml   # → ~/.config/mise (Node LTS; linked by the deps step)
 │
 ├── scripts/
 │   ├── install_zsh.sh
@@ -117,8 +120,11 @@ Useful flags:
 The installer detects apt/dnf/pacman, backs up any real config file it
 replaces (`*.pre-dotfiles`), and a failed step doesn't abort the rest —
 the summary tells you what to retry. Existing configs are symlinked, so
-re-running is always safe. macOS isn't supported (the scripts assume
-bash ≥ 4 and GNU tools).
+re-running is always safe. It asks for your password once (sudo stays
+alive for the run), installs Neovim plugins at exactly the commits in
+`lazy-lock.json`, and logs everything to
+`~/.local/state/dotfiles/install-<date>.log`. macOS isn't supported (the
+scripts assume bash ≥ 4 and GNU tools).
 
 Machine-specific shell config (JAVA_HOME, extra PATHs, ssh-agent, …)
 belongs in `~/.zshrc.local` — sourced by the tracked `.zshrc`, never
@@ -135,13 +141,9 @@ source ~/.zshrc
 
 ## 🔁 tmux Plugins
 
-After launching tmux for the first time:
-
-```
-Prefix + I
-```
-
-This installs all tmux plugins via TPM. `install_tmux.sh` already clones
+`install_tmux.sh` installs every plugin in `tmux.conf` through TPM's CLI, so
+they work on first launch. Added a plugin later? `Prefix + I` installs it.
+It also clones
 [tmux-revive](https://github.com/ChaseBP/tmux-revive) so its bindings work
 before you get to that.
 
@@ -165,7 +167,7 @@ Full docs in [the plugin's README](https://github.com/ChaseBP/tmux-revive).
 
 ## 📝 Notes
 
-- Node.js is installed via **NVM**, not system packages
+- Node.js is installed via **mise** (`mise/config.toml`), not system packages
 - Windows Terminal theming is configured manually
 - Neovim and tmux configs are symlinked from this repo
 

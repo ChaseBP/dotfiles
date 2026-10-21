@@ -37,8 +37,15 @@ build_deps_ok() {
   [ -f /usr/include/ncurses.h ] || [ -f /usr/include/ncursesw/ncurses.h ]
 }
 
+# The distro package first: Arch/CachyOS ship current tmux (3.8), so a source
+# build is only needed where the package lags (Ubuntu 24.04: 3.4).
+if ! tmux_ge_min && can_root && ! dry; then
+  pkg_install tmux || true
+  hash -r 2>/dev/null || true
+fi
+
 if tmux_ge_min; then
-  ok "tmux $(tmux -V) already >= ${TMUX_MIN_MAJOR}.${TMUX_MIN_MINOR}"
+  ok "tmux $(tmux -V) is >= ${TMUX_MIN_MAJOR}.${TMUX_MIN_MINOR}"
 elif dry; then
   info "   [dry-run] would build tmux ${TMUX_VERSION} (+libevent if needed) into ${PREFIX}"
 else
@@ -60,7 +67,7 @@ else
          && [ ! -f "$PREFIX/include/event2/event.h" ] \
          && [ ! -f /usr/include/event2/event.h ]; then
         echo "   building libevent ${LIBEVENT_VERSION} ..."
-        curl -fsSL -o le.tgz "https://github.com/libevent/libevent/releases/download/release-${LIBEVENT_VERSION}/libevent-${LIBEVENT_VERSION}.tar.gz"
+        retry 3 curl -fsSL -o le.tgz "https://github.com/libevent/libevent/releases/download/release-${LIBEVENT_VERSION}/libevent-${LIBEVENT_VERSION}.tar.gz"
         tar xzf le.tgz
         cd "libevent-${LIBEVENT_VERSION}"
         ./configure --prefix="$PREFIX" --disable-openssl --disable-debug-mode --disable-samples
@@ -68,7 +75,7 @@ else
         cd ..
       fi
       echo "   building tmux ${TMUX_VERSION} ..."
-      curl -fsSL -o tm.tgz "https://github.com/tmux/tmux/releases/download/${TMUX_VERSION}/tmux-${TMUX_VERSION}.tar.gz"
+      retry 3 curl -fsSL -o tm.tgz "https://github.com/tmux/tmux/releases/download/${TMUX_VERSION}/tmux-${TMUX_VERSION}.tar.gz"
       tar xzf tm.tgz
       cd "tmux-${TMUX_VERSION}"
       ./configure --prefix="$PREFIX" \
@@ -123,7 +130,8 @@ if [ -d "$TPM_DIR" ]; then
   ok "TPM already installed"
 else
   info "🔌 Installing TPM..."
-  run git clone --depth 1 https://github.com/tmux-plugins/tpm "$TPM_DIR"
+  retry 3 run git clone --depth 1 https://github.com/tmux-plugins/tpm "$TPM_DIR" \
+    || warn "could not clone TPM — tmux works without plugins; re-run ./install.sh --only tmux"
 fi
 
 # ------------------------------
@@ -144,7 +152,8 @@ if [ -d "$REVIVE_DIR" ]; then
   ok "tmux-revive already installed"
 else
   info "🧬 Installing tmux-revive (github.com/ChaseBP/tmux-revive)..."
-  run git clone --depth 1 https://github.com/ChaseBP/tmux-revive "$REVIVE_DIR"
+  retry 3 run git clone --depth 1 https://github.com/ChaseBP/tmux-revive "$REVIVE_DIR" \
+    || warn "could not clone tmux-revive — re-run ./install.sh --only tmux later"
 fi
 
 # ------------------------------
@@ -167,5 +176,19 @@ if [ -d "$HOME/.tmux/scripts" ] && [ -z "$(ls -A "$HOME/.tmux/scripts" 2>/dev/nu
   run rmdir "$HOME/.tmux/scripts"
 fi
 
+# ------------------------------
+# 7. The rest of tmux.conf's plugins (theme, resurrect, continuum) — TPM's CLI
+#    starts a throwaway server to read the plugin list, so no "Prefix + I" later.
+# ------------------------------
+if dry; then
+  info "   [dry-run] would install TPM plugins"
+elif [ -x "$TPM_DIR/bin/install_plugins" ] && command -v tmux >/dev/null 2>&1; then
+  info "🔌 Installing tmux plugins..."
+  if retry 2 "$TPM_DIR/bin/install_plugins" >/dev/null; then
+    ok "tmux plugins installed"
+  else
+    warn "TPM couldn't install plugins — start tmux and press Prefix + I"
+  fi
+fi
+
 ok "tmux setup complete"
-info "👉 Start tmux and press Prefix + I to install plugins"

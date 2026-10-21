@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
 # Common dev dependencies: python3 (+pip/venv) via the system package manager,
-# Node LTS via nvm (user-local, never needs sudo).
+# and Node LTS via mise — the version manager the tracked .zshrc activates.
+# (This step used to install nvm, which .zshrc stopped loading on 2026-09-13, so
+# node was never on PATH on a fresh machine.)
 set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
-# Pinned — installing nvm from `master` means an unreviewed script each run.
-NVM_VERSION="${NVM_VERSION:-v0.40.3}"
-
-info "📦 Installing common development dependencies (Node, Python)..."
+info "📦 Installing common development dependencies (Node via mise, Python)..."
 
 # ------------------------------
 # 1. Base packages — only touch the package manager when something is missing
@@ -29,48 +28,45 @@ else
 fi
 
 # ------------------------------
-# 2. Install NVM (pinned version)
+# 2. mise — the distro package where there is one (pacman), otherwise mise's own
+#    installer into ~/.local/bin (no sudo; apt/dnf don't ship it by default)
 # ------------------------------
-export NVM_DIR="$HOME/.nvm"
-if [ -d "$NVM_DIR" ]; then
-  ok "NVM already installed"
-elif dry; then
-  info "   [dry-run] would install nvm $NVM_VERSION"
+if command -v mise >/dev/null 2>&1; then
+  ok "mise already installed ($(mise --version 2>/dev/null | head -1))"
 else
-  info "⬇  Installing NVM $NVM_VERSION..."
-  # PROFILE=/dev/null: nvm must not append itself to ~/.zshrc — that file is a symlink
-  # into this repo, and the tracked .zshrc deliberately activates mise instead.
-  curl -fsSL "https://raw.githubusercontent.com/nvm-sh/nvm/$NVM_VERSION/install.sh" | PROFILE=/dev/null bash
+  [ "$PKG_MGR" = pacman ] && can_root && { pkg_install mise || true; }
+  if command -v mise >/dev/null 2>&1; then
+    ok "installed mise from the package manager"
+  elif dry; then
+    info "   [dry-run] would install mise into ~/.local/bin (https://mise.run)"
+  else
+    info "⬇  Installing mise into ~/.local/bin..."
+    mkdir -p "$HOME/.local/bin"
+    retry 3 bash -c 'curl -fsSL https://mise.run | MISE_INSTALL_PATH="$HOME/.local/bin/mise" sh' \
+      || die "could not install mise (network?) — re-run: ./install.sh --only deps"
+  fi
 fi
 
 # ------------------------------
-# 3. Load NVM + install Node.js LTS
+# 3. Tools from the tracked config (node = "lts")
 # ------------------------------
-# nvm.sh trips over `set -u` (unbound vars internally), so relax around it.
-set +u
-# shellcheck source=/dev/null
-[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
-set -u
-
-if command -v nvm >/dev/null 2>&1; then
-  if nvm ls --no-colors 2>/dev/null | grep -q "lts"; then
-    ok "Node.js LTS already installed"
-  elif dry; then
-    info "   [dry-run] would install Node.js LTS"
-  else
-    info "⬇  Installing Node.js LTS..."
-    set +u; nvm install --lts; set -u
-  fi
-  if ! dry; then set +u; nvm use --lts >/dev/null; set -u; fi
-elif ! dry; then
-  die "nvm not found after install"
+info "🔗 Linking mise config..."
+link_file "$DOTFILES_DIR/mise/config.toml" "$HOME/.config/mise/config.toml"
+if dry; then
+  info "   [dry-run] would run: mise install (Node LTS)"
+elif command -v mise >/dev/null 2>&1; then
+  info "⬇  Installing Node LTS with mise..."
+  retry 2 mise install --yes || warn "mise install failed — run it again later: mise install"
+fi
+if [ -d "$HOME/.nvm" ]; then
+  info "   (~/.nvm from an older install is unused now — remove it whenever you like)"
 fi
 
 # ------------------------------
 # 4. Verify (best effort — some may be dry-run / no-sudo skips)
 # ------------------------------
 info "🧪 Versions:"
-for c in node npm python3; do
+for c in mise node npm python3; do
   printf '   %-8s %s\n' "$c" "$("$c" --version 2>/dev/null | head -1 || echo 'not installed')"
 done
 
