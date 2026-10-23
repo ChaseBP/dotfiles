@@ -1,7 +1,0 @@
-[Unit]
-Description=Sync Caelestia's wallpaper and colours to the login screen
-ConditionPathExists=/usr/bin/noctalia-greeter-apply-appearance
-
-[Service]
-Type=oneshot
-ExecStart=%h/.local/bin/greeter-sync --auto

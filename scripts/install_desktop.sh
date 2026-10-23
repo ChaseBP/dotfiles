@@ -239,6 +239,27 @@ else
   ok "added $USER to the input group (takes effect at next login)"
 fi
 
+# Login screen: Plasma Login Manager on a KDE-first install. Preselect Caelestia's
+# session every boot (Plasma stays a deliberate one-off fallback) and this user, and
+# show the Caelestia wallpaper from a folder this user owns, which greeter-sync (run
+# from the wallpaper hook) keeps current without root.
+if pacman -Qq plasma-login-manager >/dev/null 2>&1; then
+  PLM=/etc/plasmalogin.conf
+  GREETER_DIR=/var/lib/caelestia-greeter
+  plm_set() { # $1=value, rest=kreadconfig6/kwriteconfig6 --group/--key args
+    local want=$1; shift
+    [ "$(kreadconfig6 --file "$PLM" "$@" 2>/dev/null)" = "$want" ] \
+      || as_root kwriteconfig6 --file "$PLM" "$@" "$want"
+  }
+  plm_set hyprland-uwsm.desktop --group Greeter --key PreselectedSession
+  plm_set "$USER"               --group Greeter --key PreselectedUser
+  plm_set org.kde.image         --group Greeter --key WallpaperPluginId
+  plm_set "file://$GREETER_DIR/wallpaper.jpg" \
+    --group Greeter --group Wallpaper --group org.kde.image --group General --key Image
+  [ -w "$GREETER_DIR" ] || as_root install -d -o "$USER" -g "$(id -gn)" -m 755 "$GREETER_DIR"
+  ok "login screen: Hyprland (uwsm) preselected, Caelestia wallpaper via greeter-sync"
+fi
+
 if [ "$HW_INTEL_CPU" = 1 ]; then
   paru_s --repo thermald
   as_root systemctl enable thermald.service

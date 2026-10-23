@@ -79,9 +79,9 @@ config on top and never touches `~/.config/hypr`.
 - Helper scripts (`wall`, `osk`, `xppen-tablet`, `cliphist-store`) and XP-Pen
   Deco 640 fixes (tray shim, libinput-ignore udev rule), only with the tablet
 - Wallpapers: public repo `ChaseBP/dotfiles-wallpaper`, cloned by the installer
-- **`greeter-sync`**: gives the login screen (noctalia-greeter, if it's the display
-  manager) the current wallpaper, colours and font. `greeter-sync enable` keeps it
-  in sync automatically (passwordless for you only; `disable` undoes it)
+- Login screen (Plasma Login Manager, as on a KDE-first install): Hyprland (uwsm)
+  preselected every boot, and the current wallpaper — `wall hook` runs
+  **`greeter-sync`** after every change, no root needed
 - Everything symlinked per file; originals kept as `*.pre-dotfiles`
 - Tests: `node --test caelestia/config/palette/test_palette.mjs`,
   `python3 -m unittest discover -s caelestia/tests`,

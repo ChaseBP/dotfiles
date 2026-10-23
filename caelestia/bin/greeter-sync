@@ -1,113 +1,31 @@
 #!/usr/bin/env bash
-# greeter-sync - give the login screen (noctalia-greeter) Caelestia's look: the
-# current wallpaper, its colour scheme, light/dark mode and the shell font.
-#   greeter-sync          sync now (asks for your password unless auto-sync is on)
-#   greeter-sync enable   auto-sync: passwordless sync for you (the greeter's own narrow
-#                         polkit rule) + greeter-sync.path, then sync now
-#   greeter-sync disable  undo both
-#   greeter-sync --auto   what greeter-sync.path runs on every wallpaper/scheme change:
-#                         waits for changes to settle, skips if nothing changed
-# Uses the greeter's own constrained sync: files staged in /run/user/$UID/noctalia-
-# greeter-sync, installed into /var/lib/noctalia-greeter by its pkexec helper.
+# greeter-sync - put Caelestia's current wallpaper on the login screen (Plasma Login
+# Manager). `wall hook` runs it after every wallpaper change, so normally there's
+# nothing to do by hand.
+#   greeter-sync [image]   sync now (default: the current wallpaper)
+# No root needed: the desktop step points the login screen at
+# /var/lib/caelestia-greeter/wallpaper.jpg, in a folder this user owns.
 set -euo pipefail
 
-HELPER=/usr/bin/noctalia-greeter-apply-appearance
-STATE="$HOME/.local/state/caelestia"
-SCHEME="$STATE/scheme.json"
-WALL_TXT="$STATE/wallpaper/path.txt"
-LAST="$STATE/greeter-sync.last"   # fingerprint of the last successful sync
-STAGE="/run/user/$(id -u)/noctalia-greeter-sync"
-FONT=Rubik                        # Caelestia's sans (built-in default, system-installed)
+DIR=/var/lib/caelestia-greeter
+[[ -d $DIR && -w $DIR ]] || exit 0   # login screen not set up for this (run the desktop step)
 
-auto=0; [[ ${1:-} == --auto ]] && auto=1
-say () { (( auto )) || printf '%s\n' "$*"; }
+wall=${1:-$(cat "$HOME/.local/state/caelestia/wallpaper/path.txt" 2>/dev/null || true)}
+[[ -f $wall ]] || { echo "greeter-sync: no wallpaper to sync" >&2; exit 1; }
 
-[[ -x $HELPER ]] || { say "noctalia-greeter isn't installed — nothing to sync"; exit 0; }
+# Skip if this exact file is what the login screen already shows.
+stamp="$wall $(stat -c %Y.%s "$wall")"
+[[ -f $DIR/wallpaper.jpg && $(cat "$DIR/.source" 2>/dev/null) == "$stamp" ]] && exit 0
 
-case ${1:-} in
-  enable)
-    # One admin prompt. The rule covers only `apply-appearance --sync` for this user in
-    # an active local session — not the helper's other modes, not sudo.
-    pkexec /usr/bin/noctalia-greeter passwordless-sync enable "$USER"
-    # The units live next to this script in ~/dotfiles (the caelestia step links them
-    # too); link them here so enable works before that step has re-run.
-    units="$(dirname "$(readlink -f "$0")")/../home/.config/systemd/user"
-    mkdir -p "$HOME/.config/systemd/user"
-    for u in greeter-sync.path greeter-sync.service; do
-      [[ -e $HOME/.config/systemd/user/$u ]] || ln -s "$(readlink -f "$units/$u")" "$HOME/.config/systemd/user/$u"
-    done
-    systemctl --user daemon-reload
-    systemctl --user enable --now greeter-sync.path
-    rm -f "$LAST"; exec "$0" ;;
-  disable)
-    systemctl --user disable --now greeter-sync.path
-    pkexec /usr/bin/noctalia-greeter passwordless-sync disable "$USER"
-    echo "auto-sync off; the login screen keeps its last synced look"
-    exit 0 ;;
+# Always JPEG at one fixed path: changing the path in /etc/plasmalogin.conf needs root.
+# Written beside the target and renamed over it, so the greeter never reads half a file.
+tmp=$(mktemp "$DIR/.wallpaper.XXXXXX")
+trap 'rm -f "$tmp"' EXIT
+case ${wall,,} in
+  *.jpg|*.jpeg) cp "$wall" "$tmp" ;;
+  *)            magick "${wall}[0]" -quality 92 "jpg:$tmp" ;;
 esac
-[[ -s $SCHEME && -s $WALL_TXT ]] || { say "no Caelestia wallpaper/scheme yet"; exit 0; }
-
-if (( auto )); then
-  # A wallpaper change rewrites both files, a pinned scheme follows via `wall hook`,
-  # and the launcher's variant preview rewrites scheme.json while scrolling: wait
-  # until nothing has changed for 3s, then sync the final state once.
-  while :; do
-    before=$(stat -c %Y.%s "$SCHEME" "$WALL_TXT" 2>/dev/null)
-    sleep 3
-    [[ $(stat -c %Y.%s "$SCHEME" "$WALL_TXT" 2>/dev/null) == "$before" ]] && break
-  done
-fi
-
-wall=$(<"$WALL_TXT")
-[[ -f $wall ]] || { say "wallpaper $wall is missing"; exit 1; }
-mode=$(jq -r '.mode' "$SCHEME")
-[[ $mode == light ]] || mode=dark
-
-# Caelestia's Material 3 tokens -> the greeter's 16 palette roles (Noctalia's own
-# mapping: panels on surfaceContainer, subtle outlines, tertiary for hover).
-palette=$(jq -r '.colours as $c | [
-    ["primary", "primary"], ["on_primary", "onPrimary"],
-    ["secondary", "secondary"], ["on_secondary", "onSecondary"],
-    ["tertiary", "tertiary"], ["on_tertiary", "onTertiary"],
-    ["error", "error"], ["on_error", "onError"],
-    ["surface", "surface"], ["on_surface", "onSurface"],
-    ["surface_variant", "surfaceContainer"], ["on_surface_variant", "onSurfaceVariant"],
-    ["outline", "outlineVariant"], ["shadow", "shadow"],
-    ["hover", "tertiary"], ["on_hover", "onTertiary"]
-  ][] | "\(.[0]) = \"#\($c[.[1]] // error("scheme.json has no \(.[1])"))\""' "$SCHEME")
-
-fp=$(printf '%s\n%s\n%s\n%s\n' "$wall" "$(stat -c %Y.%s "$wall")" "$mode" "$palette" | sha256sum | cut -d' ' -f1)
-# Auto runs only exist after `enable`, so their pkexec is passwordless.
-(( auto )) && [[ $(cat "$LAST" 2>/dev/null) == "$fp" ]] && exit 0
-
-# The greeter decodes jpg/png/webp/jxl; anything else (gif) goes over as a png.
-ext=${wall##*.}; ext=${ext,,}
-rm -rf "$STAGE"; mkdir -m 700 "$STAGE"
-trap 'rm -rf "$STAGE"' EXIT
-case $ext in
-  jpg|jpeg|png|webp|jxl) install -m 600 "$wall" "$STAGE/wallpaper.$ext" ;;
-  *) ext=png; magick "${wall}[0]" "$STAGE/wallpaper.png"; chmod 600 "$STAGE/wallpaper.png" ;;
-esac
-
-cat >"$STAGE/sync.toml" <<EOF
-[appearance]
-scheme = "Synced"
-theme_mode = "$mode"
-font_family = "$FONT"
-
-[appearance.palette]
-$palette
-
-[appearance.wallpaper]
-path = "/var/lib/noctalia-greeter/wallpaper.$ext"
-fill_mode = "crop"
-EOF
-chmod 600 "$STAGE/sync.toml"
-
-if pkexec "$HELPER" --sync "$STAGE"; then
-  printf '%s\n' "$fp" >"$LAST"
-  say "login screen synced: $(basename "$wall"), $mode — shows from the next login"
-else
-  echo "greeter sync failed (see above)" >&2
-  exit 1
-fi
+chmod 644 "$tmp"
+mv -f "$tmp" "$DIR/wallpaper.jpg"
+trap - EXIT
+printf '%s\n' "$stamp" >"$DIR/.source"

@@ -53,6 +53,9 @@ case "${1:-}" in
     elif [[ -s $ACTIVE ]]; then
       back_to_automatic "$w"
     fi
+    # Login screen follows the wallpaper. Detached with its output closed, so the
+    # caelestia CLI doesn't wait on the jpeg conversion.
+    "$HOME/.local/bin/greeter-sync" "$w" </dev/null >/dev/null 2>&1 &
     exit 0 ;;
   pin)
     w=$(cat "$STATE"); name=$(basename "$w")
