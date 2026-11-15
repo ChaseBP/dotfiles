@@ -27,6 +27,12 @@
             "lockBeforeSleep": true,
             "timeouts": [
                 {
+                    "idleAction": ["sh", "-c", "c=$(brightnessctl get); t=$(( c / 3 > 75 ? c / 3 : 75 )); brightnessctl -s set $(( t < c ? t : c ))"],
+                    "returnAction": ["brightnessctl", "-r"],
+                    "inhibitWhenCharging": true,
+                    "timeout": 300
+                },
+                {
                     "idleAction": "lock",
                     "timeout": 600
                 },
@@ -35,6 +41,11 @@
                     "returnAction": "dpms on",
                     "inhibitWhenAudio": true,
                     "timeout": 630
+                },
+                {
+                    "idleAction": ["systemctl", "suspend-then-hibernate"],
+                    "inhibitWhenCharging": true,
+                    "timeout": 900
                 }
             ]
         }
