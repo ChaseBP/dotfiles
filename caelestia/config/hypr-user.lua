@@ -194,6 +194,17 @@ do
     end })
 end
 
+-- Power button: a short press used to power off instantly (logind's default), with no
+-- warning. While this session runs it holds logind's power-key inhibitor, so the
+-- press opens Caelestia's session menu instead and shutting down takes a deliberate
+-- click. The inhibitor lives in Hyprland's service, so it ends with the session and
+-- the login screen and TTYs keep the normal behaviour. Holding the button still
+-- forces the machine off in firmware.
+daemon("pgrep -u \"$USER\" -f '^systemd-inhibit --what=handle-power-key' >/dev/null || "
+    .. "exec systemd-inhibit --what=handle-power-key --mode=block --who=Caelestia "
+    .. "--why='Power button opens the session menu' sleep infinity")
+hl.bind("XF86PowerOff", hl.dsp.global("caelestia:session"), { description = "Session menu (power button)" })
+
 -- Session start, two checks:
 --  * caelestia-shell-guard: if the hand-forked shell QML stops loading after an upgrade
 --    (or on a fresh machine with a newer caelestia-shell), swap the forks back to stock
