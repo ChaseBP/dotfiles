@@ -132,8 +132,14 @@ def windows():
 
 
 def show_notes(client):
+    window = lua_string("address:" + client["address"])
     if client["workspace"]["name"] != WORKSPACE:
-        dispatch("hl.dsp.window.move({window = " + lua_string("address:" + client["address"])
+        # A window without a rule for the notes workspace (Rnote) opens on the current
+        # one, and group.auto_group adds it to the focused group there. Moving a grouped
+        # window carries its whole group along, so take it out of the group first.
+        if len(client.get("grouped") or []) > 1:
+            dispatch("hl.dsp.window.move({window = " + window + ", out_of_group = true})")
+        dispatch("hl.dsp.window.move({window = " + window
                  + ", workspace = " + lua_string(WORKSPACE) + ", follow = false})")
     dispatch("hl.dsp.focus({workspace = " + lua_string(WORKSPACE) + "})")
     focus(client)

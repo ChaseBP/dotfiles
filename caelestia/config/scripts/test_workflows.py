@@ -152,5 +152,30 @@ class NotesTests(unittest.TestCase):
         self.assertEqual(args[-4:], ["-c", "4", "--", str(inbox.resolve())])
 
 
+class ShowNotesTests(unittest.TestCase):
+    def client(self, workspace, grouped=()):
+        return {"address": "0xabc", "workspace": {"name": workspace}, "grouped": list(grouped)}
+
+    def calls(self, client):
+        with patch.object(w, "dispatch") as dispatch:
+            w.show_notes(client)
+        return [c.args[0] for c in dispatch.call_args_list]
+
+    def test_a_grouped_window_leaves_its_group_alone(self):
+        # Rnote auto-joins the focused group; moving it must not drag the group along.
+        calls = self.calls(self.client("1", grouped=["0x1", "0x2", "0xabc"]))
+        self.assertIn("out_of_group = true", calls[0])
+        self.assertIn("workspace = [[" + w.WORKSPACE + "]]", calls[1])
+
+    def test_an_ungrouped_window_is_just_moved(self):
+        calls = self.calls(self.client("1"))
+        self.assertNotIn("out_of_group", " ".join(calls))
+        self.assertIn("workspace = [[" + w.WORKSPACE + "]]", calls[0])
+
+    def test_a_window_already_there_is_only_focused(self):
+        calls = self.calls(self.client(w.WORKSPACE, grouped=["0x1", "0xabc"]))
+        self.assertFalse(any("hl.dsp.window.move" in c for c in calls))
+
+
 if __name__ == "__main__":
     unittest.main()
